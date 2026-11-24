@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ori · Follow demo</title>
+<style>
+:root {
+  color-scheme: light;
+  font: 16px/1.5 system-ui, sans-serif;
+  color: #243028;
+  background: #edf0e9;
+}
+body { margin: 0; }
+main { width: min(640px, calc(100% - 32px)); margin: 28px auto; }
+header { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+h1 { margin: 0; font-size: 1.65rem; letter-spacing: -.04em; }
+.mode { font-size: .85rem; color: #4e6053; }
+.card { background: #fff; border: 1px solid #d4ded4; border-radius: 16px; overflow: hidden; margin-top: 12px; }
+canvas { width: 100%; height: auto; display: block; touch-action: none; background: #222; }
+.controls { padding: 16px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button {
+  min-height: 44px; padding: 7px 12px; background: #f2f6f0; color: #243028;
+  border: 1px solid #c6d4c7; border-radius: 8px; font: inherit; cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline-offset: 2px; }
+#follow { background: #15583b; border-color: #15583b; color: white; }
+#stop { color: #fff; background: #962d35; border-color: #962d35; }
+#status { margin: 0 0 12px; font-weight: 650; }
+#help { margin: 12px 0 0; color: #405148; }
+#motion { display: block; margin-top: 10px; font: .85rem ui-monospace, monospace; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header><div><h1>Ori</h1><span class="mode">Desktop replay demo</span></div><button id="stop">Stop</button></header>
+  <section class="card" aria-label="Preview and tracking controls">
+    <canvas id="preview" width="320" height="180" aria-label="Demo live preview. Tap or drag to select the target."></canvas>
+    <div class="controls">
+      <p id="status" role="status">Waiting for the preview</p>
+      <div class="actions">
+        <button id="confirm" hidden>Confirm selection</button>
+        <button id="cancel" hidden>Cancel selection</button>
+        <button id="track">Track only</button>
+        <button id="teach">Set gap here</button>
+        <button id="follow">Follow</button>
+        <button id="move">Move demo target</button>
+      </div>
+      <p id="help">Tap the textured target to select it. Drag to adjust the box, then confirm.</p>
+      <output id="motion">Simulated motion · HOLD</output>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+
+const canvas = document.querySelector("#preview");
+const ctx = canvas.getContext("2d");
+const buttons = Object.fromEntries(
+  [...document.querySelectorAll("button")].map(button => [button.id, button])
+);
+const statusText = document.querySelector("#status");
+const help = document.querySelector("#help");
+const motion = document.querySelector("#motion");
+const driver = crypto.getRandomValues(new Uint32Array(1))[0] || 1;
+let status = { state: "OFF", owner: 0, generation: 1, motion: "HOLD", revision: 0 };
+const retiredBoots = new Set();
+let displayed = { frame: 0, imageFrame: 0, image: null, box: null };
+let selection = null;
+let startPoint = null;
+let painting = false;
+let fatal = "";
+let hint = "";
+
+const labels = {
+  OFF: "Tracking off",
+  TRACKING: "Track only",
+  READY: "Track only · gap set",
+  FOLLOWING: "Following",
+  LOST: "Pet lost · select again",
+};
+const reasons = {
+  "owner-stop": "Stopped.",
+  "camera-stale": "Camera frames stopped arriving.",
+  "heartbeat-expired": "The control session expired.",
+  "preview-expired": "The preview stopped updating.",
+  "selection-expired": "The selection expired. Tap the live target again.",
+  "selection-uncertain": "That selection could not be tracked. Tap the live target again.",
+};
+
+function paint() {
+  if (displayed.image) ctx.drawImage(displayed.image, 0, 0);
+  const region = selection ? selection.box : displayed.box;
+  if (region) {
+    ctx.strokeStyle = selection ? "#ffce6e" : "#82ecab";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(...region);
+  }
+}
+
+function update() {
+  const owner = status.owner === driver;
+  const busy = status.owner && !owner;
+  statusText.textContent = fatal || hint || (busy ? "Controlled by another tab" : labels[status.state]);
+  motion.textContent = "Simulated motion · " + (fatal ? "HOLD" : status.motion);
+  help.textContent = selection ? "Drag around the whole target, then confirm."
+    : reasons[status.reason] || (status.state === "OFF" || status.state === "LOST"
+        ? "Tap or drag around the textured target to select it."
+        : "Set the gap while the target is still. Use Follow to simulate driving.");
+  buttons.confirm.hidden = buttons.cancel.hidden = !selection;
+  buttons.track.disabled = !owner || Boolean(selection);
+  buttons.teach.disabled = !owner || !["TRACKING", "READY"].includes(status.state) || Boolean(selection);
+  buttons.follow.disabled = !owner || status.state !== "READY" || Boolean(selection);
+  buttons.move.disabled = !owner || Boolean(selection);
+  buttons.stop.disabled = Boolean(busy);
+}
+
+function apply(next) {
+  if (retiredBoots.has(next.boot)) return;
+  if (next.boot === status.boot && next.revision < status.revision) return;
+  if (status.boot && next.boot !== status.boot) {
+    retiredBoots.add(status.boot);
+    selection = null;
+    displayed.frame = 0;
+    displayed.box = null;
+    hint = "";
+  }
+  status = next;
+  update();
+}
+
+async function post(action, fields = {}, session = status) {
+  const response = await fetch("/api/" + action, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({driver, boot: session.boot, generation: session.generation, ...fields}),
+  });
+  if (!response.ok) throw new Error("Control request failed");
+  const result = await response.json();
+  apply(result);
+  return result.accepted;
+}
+
+async function refresh() {
+  if (painting || document.hidden) return;
+  painting = true;
+  try {
+    const response = await fetch("/api/frame", {cache: "no-store"});
+    if (!response.ok) throw new Error("Preview unavailable");
+    const frame = Number(response.headers.get("X-Frame-Id"));
+    const next = JSON.parse(response.headers.get("X-Ori-Status"));
+    if (retiredBoots.has(next.boot)) return;
+    if (status.boot && next.boot !== status.boot) apply(next);
+    if (!selection) {
+      const image = await createImageBitmap(await response.blob());
+      if (!selection && !document.hidden && !retiredBoots.has(next.boot)) {
+        // Acknowledge after a rendering opportunity, using the painted frame ID.
+        const previous = displayed.image;
+        displayed.image = image;
+        displayed.imageFrame = frame;
+        displayed.box = next.generation >= status.generation ? next.box : null;
+        paint();
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (!selection && !document.hidden && displayed.image === image) displayed.frame = frame;
+        }));
+        if (previous) previous.close();
+      } else {
+        image.close();
+      }
+    }
+    fatal = "";
+    apply(next);
+    paint();
+  } catch {
+    fatal = "Preview unavailable";
+    update();
+  } finally {
+    painting = false;
+  }
+}
+
+function point(event) {
+  const bounds = canvas.getBoundingClientRect();
+  return [
+    Math.min(319, Math.max(1, (event.clientX - bounds.left) * 320 / bounds.width)),
+    Math.min(179, Math.max(1, (event.clientY - bounds.top) * 180 / bounds.height)),
+  ];
+}
+
+canvas.addEventListener("pointerdown", event => {
+  if (!displayed.imageFrame || !displayed.image || (status.owner && status.owner !== driver)
+      || status.state === "FOLLOWING") return;
+  // Freeze the canvas image and its ID so the user can confirm that exact frame.
+  startPoint = point(event);
+  selection = {frame: displayed.imageFrame, box: [
+    Math.min(239, Math.max(1, startPoint[0] - 40)),
+    Math.min(99, Math.max(1, startPoint[1] - 40)),
+    80, 80,
+  ]};
+  hint = "";
+  canvas.setPointerCapture(event.pointerId);
+  paint();
+  update();
+});
+
+canvas.addEventListener("pointermove", event => {
+  if (!startPoint || !selection) return;
+  const end = point(event);
+  const width = Math.abs(end[0] - startPoint[0]);
+  const height = Math.abs(end[1] - startPoint[1]);
+  if (width < 12 || height < 12) return;
+  selection.box = [Math.min(end[0], startPoint[0]), Math.min(end[1], startPoint[1]), width, height];
+  paint();
+});
+for (const event of ["pointerup", "pointercancel"]) {
+  canvas.addEventListener(event, () => { startPoint = null; });
+}
+
+async function command(action, fields = {}) {
+  hint = "";
+  const session = status;
+  try {
+    if (action === "follow" && displayed.frame) {
+      if (!await post("heartbeat", {frame: displayed.frame}, session)) throw new Error("Preview expired");
+    }
+    if (!await post(action, fields, session)) {
+      hint = action === "teach" ? "Hold the target steady and try again."
+        : action === "select" ? "Select a fresh frame and try again."
+        : "Action unavailable. Check the preview and current state.";
+    }
+  } catch (error) {
+    hint = error.message || "Control connection unavailable";
+  }
+  update();
+}
+
+buttons.confirm.onclick = () => {
+  if (!selection) return;
+  const {frame, box} = selection;
+  selection = null;
+  command("select", {frame, box: box.map((value, index) => value / (index % 2 ? 180 : 320))});
+};
+buttons.cancel.onclick = () => { selection = null; update(); paint(); };
+buttons.stop.onclick = () => { selection = null; command("stop"); };
+for (const action of ["track", "teach", "follow", "move"]) {
+  buttons[action].onclick = () => command(action);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) displayed.frame = 0;
+});
+
+setInterval(() => {
+  if (!document.hidden && !selection && displayed.frame && status.owner === driver) {
+    post("heartbeat", {frame: displayed.frame}).catch(() => {});
+  }
+}, 250);
+setInterval(refresh, 100);
+refresh();
+update();
+</script>
+</body>
+</html>

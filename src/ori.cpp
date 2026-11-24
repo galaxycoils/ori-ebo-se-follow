@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
+#include <iterator>
 #include <numeric>
 #include <utility>
 #include <vector>
@@ -189,9 +189,13 @@ std::optional<Box> Engine::box() const {
 }
 
 void Engine::tick(Milliseconds now) {
+    if (owner_ == 0) return;
+    if (now >= heartbeatDeadline_) {
+        clear(State::Off, "heartbeat-expired");
+        return;
+    }
     if (state_ != State::Following) return;
-    if (now >= heartbeatDeadline_) clear(State::Off, "heartbeat-expired");
-    else if (now >= previewDeadline_) clear(State::Off, "preview-expired");
+    if (now >= previewDeadline_) clear(State::Off, "preview-expired");
     else if (frames_.empty() || now - frames_.back().captured >= frameLifetime) {
         clear(State::Lost, "camera-stale");
     } else if (decision_.expires != 0 && now >= decision_.expires) {
@@ -251,6 +255,7 @@ bool Engine::select(std::uint64_t driver, std::uint64_t generation, std::uint64_
         }
     }
     owner_ = driver;
+    heartbeatDeadline_ = now + sessionLifetime;
     state_ = State::Tracking;
     calibration_.push_back(tracker_.box());
     hold("track-only");

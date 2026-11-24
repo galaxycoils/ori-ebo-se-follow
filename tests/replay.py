@@ -53,11 +53,9 @@ def retreat(s, track_only=False):
     if track_only:
         assert s.control("track")["state"] == "READY"
     result = [s.frame(box, ack=True) for box in retreat_steps()]
-    motions = list(dict.fromkeys(
-        (index,) for index, row in enumerate(result)
-        if index == 0 or row["motion"] != result[index - 1]["motion"]
-    ))
-    assert [result[i]["motion"] for (i,) in motions] == (
+    transitions = [row["motion"] for index, row in enumerate(result)
+                   if index == 0 or row["motion"] != result[index - 1]["motion"]]
+    assert transitions == (
         ["HOLD"] if track_only else ["HOLD", "FORWARD", "HOLD"]
     ), result
     return result
@@ -131,6 +129,26 @@ def test_vision(s, kind):
     assert not s.control("follow")["accepted"]
 
 
+def test_selection(s):
+    s.frame(REFERENCE)
+    frozen = s.seq
+    s.frame((127, 65, 80, 80))
+    status = s.control("select", frozen, *REFERENCE)
+    assert status["accepted"] and abs(status["box"][0] - 127) <= 2
+    assert s.control("stop")["motion"] == "HOLD"
+    for _ in range(21):
+        s.frame(REFERENCE)
+    assert not s.control("select", frozen, *REFERENCE)["accepted"]
+
+
+def test_track_owner_expiry(s):
+    s.ready()
+    for _ in range(8):
+        status = s.frame(REFERENCE)
+    assert status["state"] == "OFF" and status["reason"] == "heartbeat-expired"
+    assert s.control("select", s.seq, *REFERENCE, owner=2)["accepted"]
+
+
 def test_turn(s):
     s.following()
     output = []
@@ -164,7 +182,7 @@ def main():
     tests = [
         retreat, lambda s: retreat(s, track_only=True),
         test_camera, test_disconnect, test_frozen_preview, test_ownership,
-        test_turn, test_motion_expiry,
+        test_turn, test_motion_expiry, test_selection, test_track_owner_expiry,
     ]
     tests += [lambda s, kind=kind: test_invalid_frames(s, kind)
               for kind in ("duplicate", "stale", "future", "out-of-order")]

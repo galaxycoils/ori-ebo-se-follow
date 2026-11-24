@@ -25,6 +25,17 @@ std::string_view name(Motion motion) {
     return "HOLD";
 }
 
+std::string_view name(Inhibit cause) {
+    switch (cause) {
+        case Inhibit::Manual: return "manual-override";
+        case Inhibit::Docking: return "docking";
+        case Inhibit::Sleep: return "sleep";
+        case Inhibit::LowBattery: return "low-battery";
+        case Inhibit::Obstacle: return "factory-veto";
+    }
+    return "factory-veto";
+}
+
 std::string_view name(State state) {
     switch (state) {
         case State::Off: return "OFF";
@@ -43,6 +54,7 @@ void Steering::teach(Box box, int jitter) {
 }
 
 void Steering::reset() {
+    turning_ = Motion::Hold;
     centered_ = 0;
     retreats_ = 0;
     advancing_ = false;
@@ -64,10 +76,17 @@ Decision Steering::update(Box box) {
         return {Motion::Hold, 0, 0, "distance-uncertain-or-close"};
     }
 
-    if (box.centerX() < imageWidth * 0.4 || box.centerX() > imageWidth * 0.6) {
-        reset();
-        const Motion turn = box.centerX() < imageWidth * 0.4 ? Motion::Left : Motion::Right;
-        return {turn, 0, 0, "center-target"};
+    // Finish an existing turn inside a narrower band to tolerate edge jitter.
+    const double center = box.centerX() / imageWidth;
+    if (center < 0.4) turning_ = Motion::Left;
+    else if (center > 0.6) turning_ = Motion::Right;
+    else if ((turning_ == Motion::Left && center >= 0.45) ||
+             (turning_ == Motion::Right && center <= 0.55)) turning_ = Motion::Hold;
+
+    if (turning_ != Motion::Hold) {
+        centered_ = retreats_ = 0;
+        advancing_ = false;
+        return {turning_, 0, 0, "center-target"};
     }
 
     centered_ = std::min(centered_ + 1, 3);
@@ -122,7 +141,7 @@ bool Tracker::select(const Frame& frame, Box box) {
 bool Tracker::update(const Frame& frame) {
     struct Candidate { Box box; double score; };
     std::vector<Candidate> candidates;
-    candidates.reserve(1800);
+    candidates.reserve(3 * 21 * 29 + 8);
     const auto score = [&](Box box) {
         const auto patch = readPatch(frame, box);
         if (patch) {
@@ -194,11 +213,13 @@ void Engine::tick(Milliseconds now) {
         clear(State::Off, "heartbeat-expired");
         return;
     }
+    if (frames_.empty() || now - frames_.back().captured >= frameLifetime) {
+        clear(State::Lost, "camera-stale");
+        return;
+    }
     if (state_ != State::Following) return;
     if (now >= previewDeadline_) clear(State::Off, "preview-expired");
-    else if (frames_.empty() || now - frames_.back().captured >= frameLifetime) {
-        clear(State::Lost, "camera-stale");
-    } else if (decision_.expires != 0 && now >= decision_.expires) {
+    else if (decision_.expires != 0 && now >= decision_.expires) {
         hold("command-expired");
     }
 }
@@ -239,6 +260,7 @@ bool Engine::select(std::uint64_t driver, std::uint64_t generation, std::uint64_
                     Box box, Milliseconds now) {
     tick(now);
     if (generation != generation_ || driver == 0 || (owner_ != 0 && owner_ != driver)) return false;
+    if (!inhibits_.empty()) return false;
     clear(State::Off, "selection-expired");
     const auto selected = std::find_if(frames_.begin(), frames_.end(),
                                        [frameId](const Frame& f) { return f.id == frameId; });
@@ -262,10 +284,10 @@ bool Engine::select(std::uint64_t driver, std::uint64_t generation, std::uint64_
     return true;
 }
 
-bool Engine::teach(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
-    tick(now);
-    if (!owns(driver, generation) || (state_ != State::Tracking && state_ != State::Ready) ||
-        calibration_.size() != 3 || now - frames_.back().captured >= frameLifetime) return false;
+std::optional<Engine::Calibration> Engine::calibration() const {
+    if (calibration_.size() != 3 || (state_ != State::Tracking && state_ != State::Ready)) {
+        return std::nullopt;
+    }
     const auto median = [this](auto get) {
         std::array<int, 3> values{};
         std::transform(calibration_.begin(), calibration_.end(), values.begin(), get);
@@ -279,11 +301,19 @@ bool Engine::teach(std::uint64_t driver, std::uint64_t generation, Milliseconds 
     for (const Box sample : calibration_) {
         if (std::abs(sample.width - reference.width) > 3 ||
             std::abs(sample.height - reference.height) > 3 ||
-            std::abs(sample.centerX() - reference.centerX()) > 4) return false;
+            std::abs(sample.centerX() - reference.centerX()) > 4) return std::nullopt;
         jitter = std::max(jitter, std::abs(sample.bottom() - reference.bottom()));
     }
-    if (jitter > 4 || !reference.visible()) return false;
-    steering_.teach(reference, jitter + 2);
+    if (jitter > 4 || !reference.visible()) return std::nullopt;
+    return Calibration{reference, jitter + 2};
+}
+
+bool Engine::teach(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
+    tick(now);
+    if (!owns(driver, generation) || now - frames_.back().captured >= frameLifetime) return false;
+    const auto gap = calibration();
+    if (!gap) return false;
+    steering_.teach(gap->box, gap->jitter);
     state_ = State::Ready;
     hold("gap-ready");
     return true;
@@ -303,11 +333,12 @@ bool Engine::start(std::uint64_t driver, std::uint64_t generation, Milliseconds 
 
 bool Engine::trackOnly(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
     tick(now);
-    if (!owns(driver, generation)) return false;
-    if (state_ == State::Following) {
-        ++generation_;
-        state_ = State::Ready;
-    }
+    // Track only can race a Follow from the same READY screen in either order.
+    const bool justArmed = state_ == State::Following && owner_ == driver &&
+                           generation == generation_ - 1;
+    if (!justArmed && !owns(driver, generation)) return false;
+    ++generation_;
+    if (state_ == State::Following) state_ = State::Ready;
     steering_.reset();
     hold("track-only");
     return true;
@@ -319,7 +350,9 @@ bool Engine::heartbeat(std::uint64_t driver, std::uint64_t generation, std::uint
     if (!owns(driver, generation) || displayed < displayed_) return false;
     const auto seen = std::find_if(frames_.begin(), frames_.end(),
                                    [displayed](const Frame& f) { return f.id == displayed; });
-    if (seen == frames_.end() || now - seen->captured >= sessionLifetime) return false;
+    // A frozen selection may use the whole selection buffer while the wheels are idle.
+    const auto maxAge = state_ == State::Following ? sessionLifetime : selectionLifetime;
+    if (seen == frames_.end() || now - seen->captured >= maxAge) return false;
     displayed_ = displayed;
     previewDeadline_ = seen->captured + sessionLifetime;
     heartbeatDeadline_ = now + sessionLifetime;
@@ -328,12 +361,17 @@ bool Engine::heartbeat(std::uint64_t driver, std::uint64_t generation, std::uint
 
 bool Engine::stop(std::uint64_t driver) {
     if (owner_ != 0 && owner_ != driver) return false;
-    clear(State::Off, "owner-stop");
+    clear(State::Off, inhibits_.empty() ? "owner-stop" : name(*inhibits_.begin()));
     return true;
 }
 
-void Engine::interrupt(std::string_view reason) {
-    clear(State::Off, reason);
+void Engine::setInhibit(Inhibit cause, bool active) {
+    if (active) {
+        if (!inhibits_.insert(cause).second) return;
+    } else if (!inhibits_.erase(cause)) {
+        return;
+    }
+    clear(State::Off, inhibits_.empty() ? "select-again" : name(*inhibits_.begin()));
 }
 
 } // namespace ori

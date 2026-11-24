@@ -74,6 +74,9 @@ let startPoint = null;
 let painting = false;
 let fatal = "";
 let hint = "";
+let lastNewImage = -Infinity;
+let intent = 0;
+const previewIsLive = () => !fatal && !document.hidden && performance.now() - lastNewImage < 750;
 
 const labels = {
   OFF: "Tracking off",
@@ -104,17 +107,23 @@ function paint() {
 function update() {
   const owner = status.owner === driver;
   const busy = status.owner && !owner;
-  statusText.textContent = fatal || hint || (busy ? "Controlled by another tab" : labels[status.state]);
-  motion.textContent = "Simulated motion · " + (fatal ? "HOLD" : status.motion);
+  const live = previewIsLive();
+  const previewMessage = displayed.image ? "Waiting for live video" : "Connecting to preview";
+  statusText.textContent = fatal || (selection ? "Confirm target" : !live ? previewMessage : hint || (busy ? "Controlled by another tab" : labels[status.state]));
+  motion.textContent = "Simulated motion · " + (live ? status.motion : "unknown");
   help.textContent = selection ? "Drag around the whole target, then confirm."
-    : reasons[status.reason] || (status.state === "OFF" || status.state === "LOST"
-        ? "Tap or drag around the textured target to select it."
-        : "Set the gap while the target is still. Use Follow to simulate driving.");
+    : reasons[status.reason] || ({
+      OFF: "Tap or drag around the textured target to select it.",
+      LOST: "Tap the target in the live picture to select it again.",
+      TRACKING: status.can_teach ? "Set the gap at the distance you want to keep." : "Hold the target steady to set the gap.",
+      READY: "Gap saved. Press Follow when you want Ori to move.",
+      FOLLOWING: "Track only pauses driving and keeps the target selected.",
+    })[status.state];
   buttons.confirm.hidden = buttons.cancel.hidden = !selection;
   buttons.track.disabled = !owner || Boolean(selection);
-  buttons.teach.disabled = !owner || !["TRACKING", "READY"].includes(status.state) || Boolean(selection);
-  buttons.follow.disabled = !owner || status.state !== "READY" || Boolean(selection);
-  buttons.move.disabled = !owner || Boolean(selection);
+  buttons.teach.disabled = !live || !owner || !status.can_teach || Boolean(selection);
+  buttons.follow.disabled = !live || !owner || status.state !== "READY" || Boolean(selection);
+  buttons.move.disabled = !live || !owner || Boolean(selection);
   buttons.stop.disabled = Boolean(busy);
 }
 
@@ -128,12 +137,17 @@ function apply(next) {
     displayed.box = null;
     hint = "";
   }
+  if (selection && (selection.session.boot !== next.boot || selection.session.generation !== next.generation)) {
+    selection = null;
+    startPoint = null;
+  }
   status = next;
   update();
 }
 
 async function post(action, fields = {}, session = status) {
   const response = await fetch("/api/" + action, {
+    signal: AbortSignal.timeout(2000),
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({driver, boot: session.boot, generation: session.generation, ...fields}),
@@ -145,20 +159,33 @@ async function post(action, fields = {}, session = status) {
 }
 
 async function refresh() {
+  update();
   if (painting || document.hidden) return;
   painting = true;
   try {
-    const response = await fetch("/api/frame", {cache: "no-store"});
+    const response = await fetch("/api/frame", {cache: "no-store", signal: AbortSignal.timeout(1200)});
     if (!response.ok) throw new Error("Preview unavailable");
     const frame = Number(response.headers.get("X-Frame-Id"));
     const next = JSON.parse(response.headers.get("X-Ori-Status"));
     if (retiredBoots.has(next.boot)) return;
     if (status.boot && next.boot !== status.boot) apply(next);
-    if (!selection) {
+    if (selection && (frame - selection.frame >= 20 || performance.now() >= selection.deadline)) {
+      selection = null;
+      startPoint = null;
+      hint = "Selection expired. Tap the live picture to try again.";
+    }
+    if (frame !== displayed.imageFrame || displayed.boot !== next.boot) {
+      if (selection) {
+        await response.body.cancel();
+        apply(next);
+        return;
+      }
       const image = await createImageBitmap(await response.blob());
       if (!selection && !document.hidden && !retiredBoots.has(next.boot)) {
         // Acknowledge after a rendering opportunity, using the painted frame ID.
         const previous = displayed.image;
+        lastNewImage = performance.now();
+        displayed.boot = next.boot;
         displayed.image = image;
         displayed.imageFrame = frame;
         displayed.box = next.generation >= status.generation ? next.box : null;
@@ -170,6 +197,8 @@ async function refresh() {
       } else {
         image.close();
       }
+    } else {
+      await response.body.cancel();
     }
     fatal = "";
     apply(next);
@@ -191,11 +220,11 @@ function point(event) {
 }
 
 canvas.addEventListener("pointerdown", event => {
-  if (!displayed.imageFrame || !displayed.image || (status.owner && status.owner !== driver)
+  if ((!selection && !previewIsLive()) || !displayed.imageFrame || !displayed.image || (status.owner && status.owner !== driver)
       || status.state === "FOLLOWING") return;
   // Freeze the canvas image and its ID so the user can confirm that exact frame.
   startPoint = point(event);
-  selection = {frame: displayed.imageFrame, box: [
+  selection = {frame: displayed.imageFrame, session: status, deadline: selection?.deadline ?? performance.now() + 2000, box: [
     Math.min(239, Math.max(1, startPoint[0] - 40)),
     Math.min(99, Math.max(1, startPoint[1] - 40)),
     80, 80,
@@ -219,19 +248,21 @@ for (const event of ["pointerup", "pointercancel"]) {
   canvas.addEventListener(event, () => { startPoint = null; });
 }
 
-async function command(action, fields = {}) {
+async function command(action, fields = {}, session = status) {
+  const currentIntent = ++intent;
   hint = "";
-  const session = status;
   try {
     if (action === "follow" && displayed.frame) {
       if (!await post("heartbeat", {frame: displayed.frame}, session)) throw new Error("Preview expired");
     }
     if (!await post(action, fields, session)) {
+      if (intent !== currentIntent) return;
       hint = action === "teach" ? "Hold the target steady and try again."
         : action === "select" ? "Select a fresh frame and try again."
         : "Action unavailable. Check the preview and current state.";
     }
   } catch (error) {
+    if (intent !== currentIntent) return;
     hint = error.message || "Control connection unavailable";
   }
   update();
@@ -239,9 +270,9 @@ async function command(action, fields = {}) {
 
 buttons.confirm.onclick = () => {
   if (!selection) return;
-  const {frame, box} = selection;
+  const {frame, box, session} = selection;
   selection = null;
-  command("select", {frame, box: box.map((value, index) => value / (index % 2 ? 180 : 320))});
+  command("select", {frame, box: box.map((value, index) => value / (index % 2 ? 180 : 320))}, session);
 };
 buttons.cancel.onclick = () => { selection = null; update(); paint(); };
 buttons.stop.onclick = () => { selection = null; command("stop"); };
@@ -254,7 +285,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 setInterval(() => {
-  if (!document.hidden && !selection && displayed.frame && status.owner === driver) {
+  if (!document.hidden && displayed.frame && status.owner === driver) {
     post("heartbeat", {frame: displayed.frame}).catch(() => {});
   }
 }, 250);

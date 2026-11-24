@@ -114,6 +114,51 @@ def test_interrupt(s, command, reason):
     assert not s.control("follow", generation=old_generation)["accepted"]
 
 
+def test_stale_calibration(s):
+    s.ready()
+    old_generation = s.status["generation"]
+    s.now += 250
+    assert s.run("tick")["state"] == "LOST"
+    assert not s.control("follow", generation=old_generation)["accepted"]
+    assert not s.frame(REFERENCE)["can_teach"]
+
+
+def test_frozen_selection(s):
+    s.ready()
+    frozen = s.seq
+    for _ in range(9):
+        s.frame(REFERENCE)
+        assert s.control("heartbeat", frozen)["accepted"]
+    assert not s.control("follow")["accepted"]
+    assert s.control("select", frozen, *REFERENCE)["accepted"]
+
+
+def test_overlapping_inhibits(s):
+    s.following()
+    s.run("dock")
+    s.run("battery")
+    assert s.control("stop")["state"] == "OFF"
+    s.run("dock-clear")
+    assert not s.control("select", s.seq, *REFERENCE)["accepted"]
+    old = s.status["generation"]
+    assert s.run("battery-clear")["state"] == "OFF"
+    assert not s.control("select", s.seq, *REFERENCE, generation=old)["accepted"]
+    s.ready()
+    assert s.control("follow")["accepted"]
+
+
+def test_track_cancels_pending_follow(s):
+    s.ready()
+    old = s.status["generation"]
+    assert s.control("track")["accepted"]
+    assert not s.control("follow", generation=old)["accepted"]
+    assert s.frame(REFERENCE)["motion"] == "HOLD"
+    before_start = s.status["generation"]
+    assert s.control("follow")["accepted"]
+    assert not s.control("track", generation=before_start, owner=2)["accepted"]
+    assert s.control("track", generation=before_start)["state"] == "READY"
+
+
 def test_vision(s, kind):
     s.following()
     if kind == "lost":
@@ -182,6 +227,8 @@ def main():
     tests = [
         retreat, lambda s: retreat(s, track_only=True),
         test_camera, test_disconnect, test_frozen_preview, test_ownership,
+        test_stale_calibration, test_frozen_selection,
+        test_overlapping_inhibits, test_track_cancels_pending_follow,
         test_turn, test_motion_expiry, test_selection, test_track_owner_expiry,
     ]
     tests += [lambda s, kind=kind: test_invalid_frames(s, kind)

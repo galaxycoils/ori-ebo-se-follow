@@ -12,11 +12,11 @@ make replay CASE=retreat
 make demo
 ```
 
-The retreat fixture finishes with `HOLD → FORWARD → HOLD`. Open `http://127.0.0.1:8765` for the loopback demo. Tap the center of the textured target or drag tightly around it, then confirm. Set the gap while the target is still. Press **Follow** to watch a simulated turn, advance, and stop. In **Track only**, use **Move demo target** to see the tracker move the box while simulated wheels hold. **Stop** ends the session and clears the selection and gap.
+The retreat fixture finishes with `HOLD → FORWARD → HOLD`. Open `http://127.0.0.1:8765` for the loopback demo. Tap the center of the textured target or drag tightly around it, then confirm. Set the gap while the target is still. Press **Follow** to watch a simulated turn, advance, and stop. In **Track only**, use **Move demo target** to see the tracker move the box while simulated wheels hold. If a frozen selection expires, the preview returns to live video so you can tap again. **Stop** ends the session and clears the selection and gap.
 
 The simulator uses generated images and wheel decisions. It needs no robot, SDK, private footage, or network service.
 
-With Playwright and Chromium installed, start `make demo` and run `node tests/browser.cjs` in a second terminal for the phone-sized browser smoke test. Set `CHROMIUM` if the local binary is at a path other than `/usr/bin/chromium`.
+With Playwright and Chromium installed, run `make test-browser` to start an isolated demo, exercise the phone controls, and shut it down automatically. Set `CHROMIUM` if the local binary is at a path other than `/usr/bin/chromium`.
 
 ## Evaluate private footage locally
 

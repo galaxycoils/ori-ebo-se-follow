@@ -31,7 +31,11 @@ int main() {
     for (int i = 0; i < 3; ++i) expect(steering, {128, 81, 64, 64}, Motion::Hold);
     expect(steering, {116, 65, 88, 88}, Motion::Hold);
     expect(steering, {65, 65, 80, 80}, Motion::Left);
+    expect(steering, {90, 65, 80, 80}, Motion::Left);
+    expect(steering, {106, 65, 80, 80}, Motion::Hold);
     expect(steering, {180, 65, 80, 80}, Motion::Right);
+    expect(steering, {150, 65, 80, 80}, Motion::Right);
+    expect(steering, {133, 65, 80, 80}, Motion::Hold);
     expect(steering, {128, 69, 64, 64}, Motion::Hold);
     expect(steering, {128, 68, 64, 64}, Motion::Hold);
     expect(steering, {128, 67, 64, 64}, Motion::Forward);

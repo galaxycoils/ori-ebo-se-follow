@@ -1,10 +1,13 @@
-// Optional browser smoke test. Start make demo first.
+// Uses a fresh loopback demo unless ORI_DEMO_URL selects an existing server.
 const assert = require("node:assert/strict");
 const { chromium } = require("playwright");
 
-const base = process.env.ORI_DEMO_URL || "http://127.0.0.1:8765";
+const { spawn } = require("node:child_process");
+const { once } = require("node:events");
+const { createInterface } = require("node:readline");
+const path = require("node:path");
 
-async function main() {
+async function testDemo(base) {
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM || "/usr/bin/chromium",
     headless: true,
@@ -25,9 +28,15 @@ async function main() {
       data: {},
     });
     assert.equal(crossOrigin.status(), 403);
-    await page.locator("#preview").click({ position: await page.locator("#preview").evaluate(canvas => ({
+    const preview = page.locator("#preview");
+    const position = await preview.evaluate(canvas => ({
       x: canvas.clientWidth * 0.5, y: canvas.clientHeight * 105 / 180,
-    })) });
+    }));
+    await preview.click({ position });
+    await page.waitForFunction(() => selection === null && hint.includes("expired"));
+    assert(await page.getByRole("button", { name: "Confirm selection" }).isHidden());
+    await page.waitForFunction(() => previewIsLive());
+    await preview.click({ position });
     await page.getByRole("button", { name: "Confirm selection" }).click();
     await page.waitForFunction(() => status.state === "TRACKING");
     const selectedFrame = await page.evaluate(() => status.frame);
@@ -60,13 +69,38 @@ async function main() {
     const afterFreeze = JSON.parse(response.headers()["x-ori-status"]);
     assert.equal(afterFreeze.reason, "preview-expired");
     assert.equal(afterFreeze.motion, "HOLD");
+    assert.match(await page.locator("#motion").textContent(), /unknown/);
     await page.unroute("**/api/frame");
+    await page.waitForFunction(() => previewIsLive() && status.state === "OFF");
     await page.getByRole("button", { name: "Stop", exact: true }).click();
     await page.waitForFunction(() => status.reason === "owner-stop");
     assert.deepEqual(errors, []);
     console.log("Phone-sized browser flow passed");
   } finally {
     await browser.close();
+  }
+}
+
+async function main() {
+  if (process.env.ORI_DEMO_URL) return testDemo(process.env.ORI_DEMO_URL);
+  const server = spawn(process.env.PYTHON || "python3", ["demo/server.py", "--port", "0"], {
+    cwd: path.resolve(__dirname, ".."),
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const exited = once(server, "exit");
+  const lines = createInterface({ input: server.stdout });
+  try {
+    const [line] = await Promise.race([
+      once(lines, "line"),
+      exited.then(([code]) => { throw new Error("Demo exited before startup: " + code); }),
+    ]);
+    const address = line.match(/^Ori replay demo at (http:\/\/127\.0\.0\.1:\d+)$/);
+    if (!address) throw new Error("Unexpected demo startup message");
+    await testDemo(address[1]);
+  } finally {
+    lines.close();
+    server.kill("SIGINT");
+    await exited;
   }
 }
 

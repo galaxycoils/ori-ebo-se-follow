@@ -12,6 +12,7 @@ void report(const ori::Engine& engine, bool accepted) {
     std::cout << "{\"accepted\":" << (accepted ? "true" : "false")
               << ",\"state\":\"" << ori::name(engine.state()) << "\""
               << ",\"generation\":" << engine.generation()
+              << ",\"can_teach\":" << (engine.canTeach() ? "true" : "false")
               << ",\"owner\":" << engine.owner()
               << ",\"motion\":\"" << ori::name(decision.motion) << "\""
               << ",\"frame\":" << decision.frame
@@ -45,16 +46,16 @@ int main() {
             engine.frame(std::move(frame), now);
         } else if (command == "tick") {
             engine.tick(now);
-        } else if (command == "manual") {
-            engine.interrupt("manual-override");
-        } else if (command == "dock") {
-            engine.interrupt("docking");
-        } else if (command == "sleep") {
-            engine.interrupt("sleep");
-        } else if (command == "battery") {
-            engine.interrupt("low-battery");
-        } else if (command == "veto") {
-            engine.interrupt("factory-veto");
+        } else if (command == "manual" || command == "manual-clear") {
+            engine.setInhibit(ori::Inhibit::Manual, command == "manual");
+        } else if (command == "dock" || command == "dock-clear") {
+            engine.setInhibit(ori::Inhibit::Docking, command == "dock");
+        } else if (command == "sleep" || command == "sleep-clear") {
+            engine.setInhibit(ori::Inhibit::Sleep, command == "sleep");
+        } else if (command == "battery" || command == "battery-clear") {
+            engine.setInhibit(ori::Inhibit::LowBattery, command == "battery");
+        } else if (command == "veto" || command == "veto-clear") {
+            engine.setInhibit(ori::Inhibit::Obstacle, command == "veto");
         } else {
             std::uint64_t owner, generation;
             if (!(input >> owner >> generation)) return 2;

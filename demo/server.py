@@ -15,7 +15,7 @@ from client import ReplayClient
 from fixtures import HEIGHT, REFERENCE, WIDTH, scene
 
 PAGE = Path(__file__).with_name("index.html")
-ACTIONS = {"select", "teach", "follow", "heartbeat", "track", "stop", "move"}
+ACTIONS = {"select", "teach", "follow", "heartbeat", "track", "stop", "move", "home", "lift"}
 FRAME_INTERVAL = 0.1
 
 
@@ -54,6 +54,7 @@ class Demo:
         self.revision = 0
         self.image = b""
         self.status = {}
+        self.return_started = None
         self.box = REFERENCE
         self.movement = iter(())
 
@@ -63,6 +64,11 @@ class Demo:
 
     def record(self, status):
         self.revision += 1
+        action = status["dock_action"]
+        if action == "start":
+            self.return_started = self.now()
+        elif action == "cancel":
+            self.return_started = None
         self.status = {**status, "boot": self.boot, "revision": self.revision}
 
     def capture(self):
@@ -70,6 +76,12 @@ class Demo:
             self.box = next(self.movement, REFERENCE)
             pixels = scene(self.box)
             now = self.now()
+            # These are simulated factory telemetry samples, never wheel commands.
+            elapsed = 0 if self.return_started is None else now - self.return_started
+            signal = "idle"
+            if self.return_started is not None:
+                signal = "returning" if elapsed < 1200 else "contact" if elapsed < 1800 else "charging"
+            self.record(self.replay.call("dock-status", now, signal))
             self.seq += 1
             self.record(self.replay.call("frame", now, self.seq, now, pixels=pixels))
             self.image = png(bytes(pixels))
@@ -93,6 +105,12 @@ class Demo:
             if payload["boot"] != self.boot:
                 return {**self.status, "accepted": False}
             args = [driver, generation]
+            if action == "lift":
+                if self.status["dock"] != "charging" or self.status["generation"] != generation:
+                    return {**self.status, "accepted": False}
+                self.return_started = None
+                self.record(self.replay.call("dock-status", self.now(), "idle"))
+                return self.status
             if action == "move":
                 if self.status["owner"] != driver or self.status["generation"] != generation:
                     return {**self.status, "accepted": False}

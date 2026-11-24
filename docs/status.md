@@ -4,6 +4,7 @@
 |---|---|---|
 | Desktop core, steering, and session logic | Passed | `make test` and `make replay CASE=retreat` |
 | Phone-sized replay controls | Passed | `make test-browser` |
+| Return home and charge confirmation | Replay and phone demo tested | Physical first-attempt rate and time-to-charge require paired stock and integrated trials on Ori |
 | Real-camera tracking score | Pending | Ori footage and matched annotations for held-out evaluation |
 | Private GitHub repository | Blocked in this session | GitHub returned HTTP 403 `Resource not accessible by integration` for repository creation |
 | Native build, installation, and recovery | Blocked | Exact board and documented native toolchain, install, and restore route |

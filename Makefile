@@ -9,11 +9,11 @@ all: build/ori-replay
 build:
 	mkdir -p $@
 
-build/ori-replay: src/ori.cpp src/ori.hpp src/replay.cpp | build
-	$(CXX) $(CXXFLAGS) src/ori.cpp src/replay.cpp -o $@
+build/ori-replay: src/ori.cpp src/dock.cpp src/ori.hpp src/replay.cpp | build
+	$(CXX) $(CXXFLAGS) src/ori.cpp src/dock.cpp src/replay.cpp -o $@
 
-build/ori-tests: src/ori.cpp src/ori.hpp tests/core.cpp | build
-	$(CXX) $(CXXFLAGS) -Isrc src/ori.cpp tests/core.cpp -o $@
+build/ori-tests: src/ori.cpp src/dock.cpp src/ori.hpp tests/core.cpp | build
+	$(CXX) $(CXXFLAGS) -Isrc src/ori.cpp src/dock.cpp tests/core.cpp -o $@
 
 test: build/ori-replay build/ori-tests
 	./build/ori-tests

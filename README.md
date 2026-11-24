@@ -18,6 +18,12 @@ The simulator uses generated images and wheel decisions. It needs no robot, SDK,
 
 With Playwright and Chromium installed, run `make test-browser` to start an isolated demo, exercise the phone controls, and shut it down automatically. Set `CHROMIUM` if the local binary is at a path other than `/usr/bin/chromium`.
 
+## Return to the charging base
+
+Use **Return home** to end Follow and hand control to the factory docking routine in the simulator. The page shows return progress, contact verification and confirmed charging. Stop cancels an active request. **Lift off base (demo)** resets the simulated charger for another run. Low-battery returns initiated by the factory are observed without sending a duplicate start.
+
+For the original SE, Enabot specifies a clear approach within two metres in front of the base. Physical return reliability and charging time still require a comparison on Ori. [Enabot EBO SE](https://www.enabot.com/home-robot/ebo-se) · [Bench procedure](docs/device.md#return-to-charge-verification)
+
 ## Evaluate private footage locally
 
 Install FFmpeg and put clips and annotations under the ignored `private/` directory. Use a short, uninterrupted clip with the whole pet in view. Prepare one JSON entry per frame after resampling to 320 × 180 at 10 FPS. Each entry is `[x, y, width, height]` in image pixels, or `null` when the pet is not visible. The first entry is the initial selection and must name a visible box. Use separate clips for tuning and final evaluation.

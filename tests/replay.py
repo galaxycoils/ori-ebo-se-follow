@@ -212,6 +212,96 @@ def test_motion_expiry(s):
     assert s.run("tick")["motion"] == "HOLD"
 
 
+def dock_signal(s, signal, interval=100):
+    s.now += interval
+    return s.run("dock-status", signal)
+
+
+def test_home(s):
+    s.following()
+    assert not s.control("home")["accepted"]  # Missing factory telemetry.
+    dock_signal(s, "idle")
+    assert not s.control("home", owner=2)["accepted"]
+    before = s.status["generation"]
+    out = s.control("home")
+    assert out["accepted"] and out["dock_action"] == "start" and out["motion"] == "HOLD"
+    assert not s.control("home", generation=before)["accepted"]
+    assert not s.control("select", s.seq, *REFERENCE)["accepted"]
+    assert dock_signal(s, "returning")["dock_action"] == "none"
+    for _ in range(4):
+        assert dock_signal(s, "contact", 500)["dock"] == "checking-charge"
+    dock_signal(s, "charging")
+    dock_signal(s, "contact")  # Contact bounce resets confirmation time.
+    dock_signal(s, "charging")
+    assert dock_signal(s, "charging", 1000)["dock"] == "checking-charge"
+    assert dock_signal(s, "charging", 500)["dock"] == "charging"
+    assert not s.control("home")["accepted"]
+    assert dock_signal(s, "idle")["dock"] == "idle"
+    assert s.status["state"] == "OFF"
+
+
+def test_home_cancel(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    assert not s.control("stop", owner=2)["accepted"]
+    assert s.control("stop")["dock_action"] == "cancel"
+    assert dock_signal(s, "returning")["dock"] == "stopping"
+    assert dock_signal(s, "idle")["can_home"]
+
+
+def test_home_no_ack(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    actions = [dock_signal(s, "idle", 1000)["dock_action"] for _ in range(5)]
+    assert actions == ["none", "none", "cancel", "none", "none"]
+    assert s.status["dock"] == "failed" and s.status["can_home"]
+
+
+def test_stock_low_battery_return(s):
+    s.following()
+    s.run("battery")
+    assert dock_signal(s, "returning")["dock_action"] == "none"
+    assert not s.control("home")["accepted"]
+    for _ in range(65):
+        status = dock_signal(s, "returning", 1000)
+        assert status["dock_action"] == "none" and status["dock"] == "returning"
+    for _ in range(4):
+        status = dock_signal(s, "charging", 500)
+    assert status["dock"] == "charging"
+    s.now += 1600
+    assert s.run("tick")["dock"] == "unknown"
+    assert not dock_signal(s, "idle")["can_home"]  # Low battery still asserted.
+    s.run("battery-clear")
+    assert s.status["can_home"]
+
+
+def test_home_contact_failure(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    dock_signal(s, "contact")
+    assert dock_signal(s, "failed")["dock_action"] == "cancel"
+    assert not s.control("home")["accepted"]
+    assert dock_signal(s, "idle")["dock"] == "failed"
+    assert s.control("home")["dock_action"] == "start"
+
+
+def test_home_timeout(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    actions = [dock_signal(s, "returning", 1000)["dock_action"] for _ in range(62)]
+    assert actions.count("cancel") == 1 and "start" not in actions
+    assert dock_signal(s, "idle")["dock"] == "failed"
+
+
+def test_home_stale(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    s.now += 1601
+    assert s.run("tick")["dock_action"] == "cancel"
+    assert not s.control("home")["accepted"]
+    assert dock_signal(s, "idle")["can_home"]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", choices=["retreat"])
@@ -225,6 +315,8 @@ def main():
         return
 
     tests = [
+        test_home, test_home_cancel, test_home_no_ack, test_home_contact_failure, test_home_timeout,
+        test_stock_low_battery_return, test_home_stale,
         retreat, lambda s: retreat(s, track_only=True),
         test_camera, test_disconnect, test_frozen_preview, test_ownership,
         test_stale_calibration, test_frozen_selection,

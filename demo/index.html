@@ -47,6 +47,8 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
         <button id="track">Track only</button>
         <button id="teach">Set gap here</button>
         <button id="follow">Follow</button>
+        <button id="home">Return home</button>
+        <button id="lift" hidden>Lift off base (demo)</button>
         <button id="move">Move demo target</button>
       </div>
       <p id="help">Tap the target to track it, or drag a box for a custom selection.</p>
@@ -112,10 +114,19 @@ function setText(element, value) {
 
 function update() {
   const owner = status.owner === driver;
-  const busy = status.owner && !owner;
+  const dockLabels = {
+    requested: "Requesting return to base",
+    returning: "Returning to base",
+    "checking-charge": "Checking charging contacts",
+    charging: "Charging on base",
+    stopping: "Waiting for docking to stop",
+    failed: "Charging was not confirmed",
+    unknown: "Checking base status",
+  };
+  const busy = (status.owner && !owner) || (status.dock_owner && status.dock_owner !== driver);
   const live = previewIsLive();
   const previewMessage = displayed.image ? "Waiting for live video" : "Connecting to preview";
-  const stateLabel = busy ? "Controlled by another tab" : labels[status.state];
+  const stateLabel = busy ? "Controlled by another tab" : dockLabels[status.dock] || labels[status.state];
   const feedback = pending === "stop" ? "Stopping…" : pending === "select" ? "Selecting target…" : "";
   setText(statusText, fatal || feedback || (selection ? "Adjust selection" : !live ? previewMessage : hint || stateLabel));
   setText(motion, "Simulated motion · " + (live ? status.motion : "unknown"));
@@ -134,6 +145,22 @@ function update() {
   buttons.move.hidden = !owner || Boolean(selection) || status.state === "FOLLOWING";
   buttons.teach.disabled = !live || !status.can_teach || Boolean(pending);
   buttons.follow.disabled = buttons.move.disabled = !live || Boolean(pending);
+  buttons.home.hidden = !status.can_home || Boolean(selection);
+  buttons.home.disabled = Boolean(busy || pending) || !live;
+  buttons.lift.hidden = status.dock !== "charging";
+  buttons.lift.disabled = Boolean(pending) || !live;
+  if (dockLabels[status.dock]) {
+    const dockHelp = {
+      requested: "Waiting for the factory controller.",
+      returning: "The factory controller has the wheels.",
+      "checking-charge": "Waiting for sustained charging feedback.",
+      charging: "Lift Ori off the simulated base to start another session.",
+      stopping: "Waiting for the controller to report idle.",
+      failed: "Clear the approach and place Ori within 2 m in front of the base before retrying.",
+      unknown: "Waiting for fresh factory feedback.",
+    };
+    setText(help, dockHelp[status.dock]);
+  }
   buttons.stop.disabled = Boolean(busy);
 
 }
@@ -234,7 +261,7 @@ function point(event) {
 
 canvas.addEventListener("pointerdown", event => {
   if (!event.isPrimary || event.button !== 0 || pending || (!selection && !previewIsLive()) || !displayed.imageFrame || !displayed.image || (status.owner && status.owner !== driver)
-      || status.state === "FOLLOWING") return;
+      || status.state === "FOLLOWING" || (status.dock !== "idle" && !status.can_home)) return;
   // Freeze the canvas image and its ID so the user can confirm that exact frame.
   dragging = Boolean(selection);
   startPoint = point(event);
@@ -306,7 +333,7 @@ function confirmSelection() {
 buttons.confirm.onclick = confirmSelection;
 buttons.cancel.onclick = () => { selection = null; update(); paint(); };
 buttons.stop.onclick = () => { selection = null; command("stop"); };
-for (const action of ["track", "teach", "follow", "move"]) {
+for (const action of ["track", "teach", "follow", "move", "home", "lift"]) {
   buttons[action].onclick = () => command(action);
 }
 

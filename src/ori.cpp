@@ -31,6 +31,7 @@ std::string_view name(Inhibit cause) {
         case Inhibit::Docking: return "docking";
         case Inhibit::Sleep: return "sleep";
         case Inhibit::LowBattery: return "low-battery";
+        case Inhibit::ReturnHome: return "return-home";
         case Inhibit::Obstacle: return "factory-veto";
     }
     return "factory-veto";
@@ -213,6 +214,15 @@ std::optional<Box> Engine::box() const {
 }
 
 void Engine::tick(Milliseconds now) {
+    if (dockState_ == DockState::Charging && now - dockSample_ > 1500) {
+        dockState_ = DockState::Unknown;
+        chargeSince_ = -1;
+    }
+    if (dockInProgress()) {
+        const bool stale = now - dockSample_ > 1500;
+        if (dockOwner_ && (stale || now - dockStarted_ >= 60000)) cancelDock(true);
+        else if (stale) dockState_ = DockState::Unknown;
+    }
     if (owner_ == 0) return;
     if (now >= heartbeatDeadline_) {
         clear(State::Off, "heartbeat-expired");
@@ -365,13 +375,16 @@ bool Engine::heartbeat(std::uint64_t driver, std::uint64_t generation, std::uint
 }
 
 bool Engine::stop(std::uint64_t driver) {
-    if (owner_ != 0 && owner_ != driver) return false;
+    if ((owner_ != 0 && owner_ != driver) || (dockOwner_ != 0 && dockOwner_ != driver)) return false;
+    if (dockInProgress()) cancelDock(false);
     clear(State::Off, inhibits_.empty() ? "owner-stop" : name(*inhibits_.begin()));
     return true;
 }
 
 void Engine::setInhibit(Inhibit cause, bool active) {
     if (active) {
+        if ((cause == Inhibit::Manual || cause == Inhibit::Sleep || cause == Inhibit::Obstacle)
+                && dockOwner_ && dockInProgress()) cancelDock(false);
         if (!inhibits_.insert(cause).second) return;
     } else if (!inhibits_.erase(cause)) {
         return;

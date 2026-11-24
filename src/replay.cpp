@@ -7,12 +7,16 @@
 
 namespace {
 
-void report(const ori::Engine& engine, bool accepted) {
+void report(ori::Engine& engine, bool accepted, ori::Milliseconds now) {
     const auto& decision = engine.decision();
     std::cout << "{\"accepted\":" << (accepted ? "true" : "false")
               << ",\"state\":\"" << ori::name(engine.state()) << "\""
               << ",\"generation\":" << engine.generation()
               << ",\"can_teach\":" << (engine.canTeach() ? "true" : "false")
+              << ",\"dock\":\"" << ori::name(engine.dockState()) << "\""
+              << ",\"dock_action\":\"" << ori::name(engine.takeDockAction()) << "\""
+              << ",\"can_home\":" << (engine.canRequestHome(now) ? "true" : "false")
+              << ",\"dock_owner\":" << engine.dockOwner()
               << ",\"owner\":" << engine.owner()
               << ",\"motion\":\"" << ori::name(decision.motion) << "\""
               << ",\"frame\":" << decision.frame
@@ -44,6 +48,18 @@ int main() {
             if (!(input >> frame.id >> frame.captured)) return 2;
             if (!std::cin.read(reinterpret_cast<char*>(frame.pixels.data()), frame.pixels.size())) return 2;
             engine.frame(std::move(frame), now);
+        } else if (command == "dock-status") {
+            std::string value;
+            if (!(input >> value)) return 2;
+            ori::DockSignal signal;
+            if (value == "idle") signal = ori::DockSignal::Idle;
+            else if (value == "returning") signal = ori::DockSignal::Returning;
+            else if (value == "contact") signal = ori::DockSignal::Contact;
+            else if (value == "charging") signal = ori::DockSignal::Charging;
+            else if (value == "failed") signal = ori::DockSignal::Failed;
+            else if (value == "unknown") signal = ori::DockSignal::Unknown;
+            else return 2;
+            engine.observeDock(signal, now);
         } else if (command == "tick") {
             engine.tick(now);
         } else if (command == "manual" || command == "manual-clear") {
@@ -59,7 +75,9 @@ int main() {
         } else {
             std::uint64_t owner, generation;
             if (!(input >> owner >> generation)) return 2;
-            if (command == "select") {
+            if (command == "home") {
+                accepted = engine.requestHome(owner, generation, now);
+            } else if (command == "select") {
                 std::uint64_t frameId;
                 ori::Box box;
                 if (!(input >> frameId >> box.x >> box.y >> box.width >> box.height)) return 2;
@@ -80,6 +98,6 @@ int main() {
                 return 2;
             }
         }
-        report(engine, accepted);
+        report(engine, accepted, now);
     }
 }

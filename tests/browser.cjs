@@ -85,6 +85,15 @@ async function testDemo(base) {
     await page.waitForFunction(() => previewIsLive() && status.state === "OFF");
     await page.getByRole("button", { name: "Stop", exact: true }).click();
     await page.waitForFunction(() => status.reason === "owner-stop");
+    await page.getByRole("button", { name: "Return home" }).click();
+    await page.waitForFunction(() => status.dock === "returning");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.waitForFunction(() => status.dock === "idle");
+    await page.getByRole("button", { name: "Return home" }).click();
+    await page.waitForFunction(() => status.dock === "charging");
+    assert(await page.getByRole("button", { name: "Return home" }).isHidden());
+    await page.getByRole("button", { name: "Lift off base (demo)" }).click();
+    await page.waitForFunction(() => status.dock === "idle" && status.state === "OFF");
     assert.deepEqual(errors, []);
     console.log("Phone-sized browser flow passed");
   } finally {

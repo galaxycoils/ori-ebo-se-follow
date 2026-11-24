@@ -7,26 +7,26 @@
 <style>
 :root {
   color-scheme: light;
-  font: 16px/1.5 system-ui, sans-serif;
+  font: 16px/1.5 "Inter", system-ui, sans-serif;
   color: #243028;
   background: #edf0e9;
 }
 body { margin: 0; }
 main { width: min(640px, calc(100% - 32px)); margin: 28px auto; }
-header { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+header { position: sticky; top: 0; z-index: 1; padding: 8px 0; background: #edf0e9; display: flex; gap: 16px; align-items: center; justify-content: space-between; }
 h1 { margin: 0; font-size: 1.65rem; letter-spacing: -.04em; }
 .mode { font-size: .85rem; color: #4e6053; }
 .card { background: #fff; border: 1px solid #d4ded4; border-radius: 16px; overflow: hidden; margin-top: 12px; }
 canvas { width: 100%; height: auto; display: block; touch-action: none; background: #222; }
 .controls { padding: 16px; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 button {
   min-height: 44px; padding: 7px 12px; background: #f2f6f0; color: #243028;
   border: 1px solid #c6d4c7; border-radius: 8px; font: inherit; cursor: pointer;
 }
 button:disabled { opacity: .5; cursor: default; }
 button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline-offset: 2px; }
-#follow { background: #15583b; border-color: #15583b; color: white; }
+#confirm, #follow { background: #15583b; border-color: #15583b; color: white; }
 #stop { color: #fff; background: #962d35; border-color: #962d35; }
 #status { margin: 0 0 12px; font-weight: 650; }
 #help { margin: 12px 0 0; color: #405148; }
@@ -49,7 +49,7 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
         <button id="follow">Follow</button>
         <button id="move">Move demo target</button>
       </div>
-      <p id="help">Tap the textured target to select it. Drag to adjust the box, then confirm.</p>
+      <p id="help">Tap the target to track it, or drag a box for a custom selection.</p>
       <output id="motion">Simulated motion · HOLD</output>
     </div>
   </section>
@@ -71,7 +71,9 @@ const retiredBoots = new Set();
 let displayed = { frame: 0, imageFrame: 0, image: null, box: null };
 let selection = null;
 let startPoint = null;
-let painting = false;
+let lastTag = "";
+let dragging = false;
+let pending = "";
 let fatal = "";
 let hint = "";
 let lastNewImage = -Infinity;
@@ -104,27 +106,36 @@ function paint() {
   }
 }
 
+function setText(element, value) {
+  if (element.textContent !== value) element.textContent = value;
+}
+
 function update() {
   const owner = status.owner === driver;
   const busy = status.owner && !owner;
   const live = previewIsLive();
   const previewMessage = displayed.image ? "Waiting for live video" : "Connecting to preview";
-  statusText.textContent = fatal || (selection ? "Confirm target" : !live ? previewMessage : hint || (busy ? "Controlled by another tab" : labels[status.state]));
-  motion.textContent = "Simulated motion · " + (live ? status.motion : "unknown");
-  help.textContent = selection ? "Drag around the whole target, then confirm."
+  const stateLabel = busy ? "Controlled by another tab" : labels[status.state];
+  const feedback = pending === "stop" ? "Stopping…" : pending === "select" ? "Selecting target…" : "";
+  setText(statusText, fatal || feedback || (selection ? "Adjust selection" : !live ? previewMessage : hint || stateLabel));
+  setText(motion, "Simulated motion · " + (live ? status.motion : "unknown"));
+  setText(help, selection ? "Drag around the whole target, then confirm."
     : reasons[status.reason] || ({
-      OFF: "Tap or drag around the textured target to select it.",
+      OFF: "Tap the target to track it, or drag a box for a custom selection.",
       LOST: "Tap the target in the live picture to select it again.",
       TRACKING: status.can_teach ? "Set the gap at the distance you want to keep." : "Hold the target steady to set the gap.",
       READY: "Gap saved. Press Follow when you want Ori to move.",
       FOLLOWING: "Track only pauses driving and keeps the target selected.",
-    })[status.state];
+    })[status.state]);
   buttons.confirm.hidden = buttons.cancel.hidden = !selection;
-  buttons.track.disabled = !owner || Boolean(selection);
-  buttons.teach.disabled = !live || !owner || !status.can_teach || Boolean(selection);
-  buttons.follow.disabled = !live || !owner || status.state !== "READY" || Boolean(selection);
-  buttons.move.disabled = !live || !owner || Boolean(selection);
+  buttons.track.hidden = !owner || Boolean(selection) || (status.state !== "FOLLOWING" && pending !== "follow");
+  buttons.teach.hidden = !owner || Boolean(selection) || status.state === "FOLLOWING";
+  buttons.follow.hidden = !owner || Boolean(selection) || status.state !== "READY";
+  buttons.move.hidden = !owner || Boolean(selection) || status.state === "FOLLOWING";
+  buttons.teach.disabled = !live || !status.can_teach || Boolean(pending);
+  buttons.follow.disabled = buttons.move.disabled = !live || Boolean(pending);
   buttons.stop.disabled = Boolean(busy);
+
 }
 
 function apply(next) {
@@ -159,12 +170,15 @@ async function post(action, fields = {}, session = status) {
 }
 
 async function refresh() {
-  update();
-  if (painting || document.hidden) return;
-  painting = true;
+  if (document.hidden) {
+    setTimeout(refresh, 200);
+    return;
+  }
   try {
-    const response = await fetch("/api/frame", {cache: "no-store", signal: AbortSignal.timeout(1200)});
+    const response = await fetch("/api/frame", {cache: "no-store", headers: {"If-None-Match": lastTag}, signal: AbortSignal.timeout(1200)});
+    if (response.status === 204) return;
     if (!response.ok) throw new Error("Preview unavailable");
+    lastTag = response.headers.get("ETag") || "";
     const frame = Number(response.headers.get("X-Frame-Id"));
     const next = JSON.parse(response.headers.get("X-Ori-Status"));
     if (retiredBoots.has(next.boot)) return;
@@ -202,12 +216,11 @@ async function refresh() {
     }
     fatal = "";
     apply(next);
-    paint();
   } catch {
     fatal = "Preview unavailable";
     update();
   } finally {
-    painting = false;
+    setTimeout(refresh, fatal ? 180 : 0);
   }
 }
 
@@ -220,9 +233,10 @@ function point(event) {
 }
 
 canvas.addEventListener("pointerdown", event => {
-  if ((!selection && !previewIsLive()) || !displayed.imageFrame || !displayed.image || (status.owner && status.owner !== driver)
+  if (!event.isPrimary || event.button !== 0 || pending || (!selection && !previewIsLive()) || !displayed.imageFrame || !displayed.image || (status.owner && status.owner !== driver)
       || status.state === "FOLLOWING") return;
   // Freeze the canvas image and its ID so the user can confirm that exact frame.
+  dragging = Boolean(selection);
   startPoint = point(event);
   selection = {frame: displayed.imageFrame, session: status, deadline: selection?.deadline ?? performance.now() + 2000, box: [
     Math.min(239, Math.max(1, startPoint[0] - 40)),
@@ -236,25 +250,38 @@ canvas.addEventListener("pointerdown", event => {
 });
 
 canvas.addEventListener("pointermove", event => {
-  if (!startPoint || !selection) return;
+  if (!event.isPrimary || !startPoint || !selection) return;
   const end = point(event);
   const width = Math.abs(end[0] - startPoint[0]);
   const height = Math.abs(end[1] - startPoint[1]);
+  if (Math.max(width, height) >= 8) dragging = true;
   if (width < 12 || height < 12) return;
   selection.box = [Math.min(end[0], startPoint[0]), Math.min(end[1], startPoint[1]), width, height];
   paint();
 });
-for (const event of ["pointerup", "pointercancel"]) {
-  canvas.addEventListener(event, () => { startPoint = null; });
-}
+canvas.addEventListener("pointerup", event => {
+  if (!event.isPrimary || !startPoint) return;
+  startPoint = null;
+  if (selection && !dragging) confirmSelection();
+});
+canvas.addEventListener("pointercancel", event => {
+  if (!event.isPrimary) return;
+  startPoint = selection = null;
+  update();
+  paint();
+});
 
 async function command(action, fields = {}, session = status) {
+  if (pending && action !== "stop" && action !== "track") return;
   const currentIntent = ++intent;
+  pending = action;
+  update();
   hint = "";
   try {
     if (action === "follow" && displayed.frame) {
       if (!await post("heartbeat", {frame: displayed.frame}, session)) throw new Error("Preview expired");
     }
+    if (intent !== currentIntent) return;
     if (!await post(action, fields, session)) {
       if (intent !== currentIntent) return;
       hint = action === "teach" ? "Hold the target steady and try again."
@@ -264,16 +291,19 @@ async function command(action, fields = {}, session = status) {
   } catch (error) {
     if (intent !== currentIntent) return;
     hint = error.message || "Control connection unavailable";
+  } finally {
+    if (intent === currentIntent) pending = "";
+    update();
   }
-  update();
 }
 
-buttons.confirm.onclick = () => {
+function confirmSelection() {
   if (!selection) return;
   const {frame, box, session} = selection;
   selection = null;
   command("select", {frame, box: box.map((value, index) => value / (index % 2 ? 180 : 320))}, session);
-};
+}
+buttons.confirm.onclick = confirmSelection;
 buttons.cancel.onclick = () => { selection = null; update(); paint(); };
 buttons.stop.onclick = () => { selection = null; command("stop"); };
 for (const action of ["track", "teach", "follow", "move"]) {
@@ -285,11 +315,12 @@ document.addEventListener("visibilitychange", () => {
 });
 
 setInterval(() => {
+  update();
   if (!document.hidden && displayed.frame && status.owner === driver) {
     post("heartbeat", {frame: displayed.frame}).catch(() => {});
   }
 }, 250);
-setInterval(refresh, 100);
+
 refresh();
 update();
 </script>

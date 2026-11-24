@@ -32,12 +32,23 @@ async function testDemo(base) {
     const position = await preview.evaluate(canvas => ({
       x: canvas.clientWidth * 0.5, y: canvas.clientHeight * 105 / 180,
     }));
-    await preview.click({ position });
+    const bounds = await preview.boundingBox();
+    async function drawBox() {
+      await page.mouse.move(bounds.x + bounds.width * 120 / 320, bounds.y + bounds.height * 65 / 180);
+      await page.mouse.down();
+      await page.mouse.move(bounds.x + bounds.width * 200 / 320, bounds.y + bounds.height * 145 / 180, { steps: 4 });
+      await page.mouse.up();
+    }
+    await drawBox();
     await page.waitForFunction(() => selection === null && hint.includes("expired"));
     assert(await page.getByRole("button", { name: "Confirm selection" }).isHidden());
     await page.waitForFunction(() => previewIsLive());
-    await preview.click({ position });
+    await drawBox();
     await page.getByRole("button", { name: "Confirm selection" }).click();
+    await page.waitForFunction(() => status.state === "TRACKING");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await page.waitForFunction(() => status.state === "OFF" && !pending);
+    await preview.click({ position });
     await page.waitForFunction(() => status.state === "TRACKING");
     const selectedFrame = await page.evaluate(() => status.frame);
     await page.waitForFunction(frame => status.frame >= frame + 3, selectedFrame);

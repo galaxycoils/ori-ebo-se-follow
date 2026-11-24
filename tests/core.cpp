@@ -40,5 +40,9 @@ int main() {
     expect(steering, {128, 68, 64, 64}, Motion::Hold);
     expect(steering, {128, 67, 64, 64}, Motion::Forward);
     expect(steering, {0, 67, 64, 64}, Motion::Hold);
+    expect(steering, {66, 65, 80, 80}, Motion::Left);
+    expect(steering, {180, 65, 80, 80}, Motion::Hold);
+    expect(steering, {180, 65, 80, 80}, Motion::Right);
+    expect(steering, {66, 65, 80, 80}, Motion::Hold);
     std::cout << "Steering tests passed\n";
 }

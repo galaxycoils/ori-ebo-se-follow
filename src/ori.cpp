@@ -78,6 +78,11 @@ Decision Steering::update(Box box) {
 
     // Finish an existing turn inside a narrower band to tolerate edge jitter.
     const double center = box.centerX() / imageWidth;
+    if ((turning_ == Motion::Left && center > 0.6) ||
+        (turning_ == Motion::Right && center < 0.4)) {
+        reset();
+        return {Motion::Hold, 0, 0, "confirm-turn-reversal"};
+    }
     if (center < 0.4) turning_ = Motion::Left;
     else if (center > 0.6) turning_ = Motion::Right;
     else if ((turning_ == Motion::Left && center >= 0.45) ||

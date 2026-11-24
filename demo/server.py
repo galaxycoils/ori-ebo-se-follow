@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from client import ReplayClient
-from fixtures import HEIGHT, REFERENCE, WIDTH, retreat_steps, scene
+from fixtures import HEIGHT, REFERENCE, WIDTH, scene
 
 PAGE = Path(__file__).with_name("index.html")
 ACTIONS = {"select", "teach", "follow", "heartbeat", "track", "stop", "move"}
@@ -31,26 +31,30 @@ def png(pixels):
             + chunk(b"IEND", b""))
 
 
-def movement():
-    for x in range(113, 70, -7):
-        yield (x, 65, 80, 80)
-    for x in range(71, 121, 7):
-        yield (x, 65, 80, 80)
-    for box in retreat_steps():
-        yield box
-        yield box
+def movement(start):
+    # Start from the visible pose, including when a second request interrupts a move.
+    legs = [((71, 65, 80, 80), 12), (REFERENCE, 12),
+            ((130, 63, 60, 60), 12), ((130, 63, 60, 60), 4), (REFERENCE, 12)]
+    for end, steps in legs:
+        for step in range(1, steps + 1):
+            t = step / steps
+            weight = t * t * (3 - 2 * t)
+            yield tuple(round(a + (b - a) * weight) for a, b in zip(start, end))
+        start = end
 
 
 class Demo:
     def __init__(self, replay):
         self.replay = replay
         self.lock = threading.Lock()
+        self.new_frame = threading.Condition(self.lock)
         self.finished = threading.Event()
         self.seq = 0
         self.boot = secrets.token_hex(16)
         self.revision = 0
         self.image = b""
         self.status = {}
+        self.box = REFERENCE
         self.movement = iter(())
 
     @staticmethod
@@ -63,15 +67,21 @@ class Demo:
 
     def capture(self):
         with self.lock:
-            pixels = scene(next(self.movement, REFERENCE))
+            self.box = next(self.movement, REFERENCE)
+            pixels = scene(self.box)
             now = self.now()
             self.seq += 1
             self.record(self.replay.call("frame", now, self.seq, now, pixels=pixels))
             self.image = png(bytes(pixels))
+            self.new_frame.notify_all()
 
     def run(self):
-        while not self.finished.wait(FRAME_INTERVAL):
+        deadline = time.monotonic() + FRAME_INTERVAL
+        while not self.finished.wait(max(0, deadline - time.monotonic())):
             self.capture()
+            deadline += FRAME_INTERVAL
+            if deadline < time.monotonic():
+                deadline = time.monotonic() + FRAME_INTERVAL
 
     def action(self, action, payload):
         driver = payload["driver"]
@@ -86,7 +96,7 @@ class Demo:
             if action == "move":
                 if self.status["owner"] != driver or self.status["generation"] != generation:
                     return {**self.status, "accepted": False}
-                self.movement = movement()
+                self.movement = movement(self.box)
                 return {**self.status, "accepted": True}
             if action in {"select", "heartbeat"}:
                 frame = payload["frame"]
@@ -101,7 +111,7 @@ class Demo:
                 args.extend(round(n * size) for n, size in zip(box, (WIDTH, HEIGHT, WIDTH, HEIGHT)))
             self.record(self.replay.call(action, self.now(), *args))
             if action == "follow" and self.status["accepted"]:
-                self.movement = movement()
+                self.movement = movement(self.box)
             return self.status
 
 
@@ -119,8 +129,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         for name, value in headers:
             self.send_header(name, value)
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            # A closed tab can cancel a request while it waits for a new frame.
+            self.close_connection = True
 
     def do_GET(self):
         if self.headers.get("Host") != self.server.host:
@@ -130,11 +144,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             self.response(200, PAGE.read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/frame":
-            with self.server.demo.lock:
-                frame = self.server.demo.image
-                frame_id = self.server.demo.seq
-                status = json.dumps(self.server.demo.status, separators=(",", ":"))
-            self.response(200, frame, "image/png", [("X-Frame-Id", str(frame_id)), ("X-Ori-Status", status)])
+            demo = self.server.demo
+            previous = self.headers.get("If-None-Match")
+            with demo.new_frame:
+                def tag():
+                    return f'"{demo.boot}-{demo.seq}"'
+
+                demo.new_frame.wait_for(lambda: previous != tag(), timeout=0.4)
+                etag = tag()
+                frame_id, frame, status = demo.seq, demo.image, demo.status
+            if previous == etag:
+                self.response(204, b"", "image/png")
+            else:
+                self.response(200, frame, "image/png", [
+                    ("ETag", etag), ("X-Frame-Id", str(frame_id)),
+                    ("X-Ori-Status", json.dumps(status, separators=(",", ":"))),
+                ])
         else:
             self.send_error(404)
 

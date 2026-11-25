@@ -6,6 +6,8 @@ from functools import lru_cache
 WIDTH = 320
 HEIGHT = 180
 REFERENCE = (120, 65, 80, 80)
+MOVEMENT = [((71, 65, 80, 80), 12), (REFERENCE, 12),
+            ((130, 63, 60, 60), 12), ((130, 63, 60, 60), 4), (REFERENCE, 12)]
 BACKGROUND = bytes([34]) * (WIDTH * HEIGHT)
 
 

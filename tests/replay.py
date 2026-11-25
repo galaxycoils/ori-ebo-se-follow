@@ -186,6 +186,15 @@ def test_selection(s):
     assert not s.control("select", frozen, *REFERENCE)["accepted"]
 
 
+def test_heartbeat_before_selection(s):
+    s.frame(REFERENCE)
+    before_selection = s.seq
+    s.frame(REFERENCE)
+    assert s.control("select", s.seq, *REFERENCE)["accepted"]
+    assert not s.control("heartbeat", before_selection)["accepted"]
+    assert s.control("heartbeat", s.seq)["accepted"]
+
+
 def test_track_owner_expiry(s):
     s.ready()
     for _ in range(8):
@@ -257,6 +266,18 @@ def test_home_no_ack(s):
     assert s.status["dock"] == "failed" and s.status["can_home"]
 
 
+def test_home_late_ack(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    dock_signal(s, "idle", 1000)
+    dock_signal(s, "idle", 1000)
+    s.now += 1000
+    timeout = s.run("tick")
+    assert timeout["dock_action"] == "cancel" and timeout["dock"] == "stopping"
+    assert dock_signal(s, "returning")["dock"] == "stopping"
+    assert dock_signal(s, "idle")["dock"] == "failed"
+
+
 def test_stock_low_battery_return(s):
     s.following()
     s.run("battery")
@@ -315,13 +336,14 @@ def main():
         return
 
     tests = [
-        test_home, test_home_cancel, test_home_no_ack, test_home_contact_failure, test_home_timeout,
+        test_home, test_home_cancel, test_home_no_ack, test_home_late_ack,
+        test_home_contact_failure, test_home_timeout,
         test_stock_low_battery_return, test_home_stale,
         retreat, lambda s: retreat(s, track_only=True),
         test_camera, test_disconnect, test_frozen_preview, test_ownership,
         test_stale_calibration, test_frozen_selection,
         test_overlapping_inhibits, test_track_cancels_pending_follow,
-        test_turn, test_motion_expiry, test_selection, test_track_owner_expiry,
+        test_turn, test_motion_expiry, test_selection, test_heartbeat_before_selection, test_track_owner_expiry,
     ]
     tests += [lambda s, kind=kind: test_invalid_frames(s, kind)
               for kind in ("duplicate", "stale", "future", "out-of-order")]

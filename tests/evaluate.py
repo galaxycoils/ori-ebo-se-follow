@@ -23,14 +23,16 @@ def labels_from(path):
     content = json.loads(path.read_text())
     if not isinstance(content, list) or not content or content[0] is None:
         raise ValueError("Provide a nonempty list of boxes with an initial selection.")
-    for box in content:
+    for index, box in enumerate(content):
         if box is None:
             continue
         if not isinstance(box, list) or len(box) != 4 or any(type(n) is not int for n in box):
             raise ValueError("Each annotation must be a list of four integers or null.")
         x, y, w, h = box
-        if not (0 < x < x + w < WIDTH and 0 < y < y + h < HEIGHT):
+        if not (0 <= x < x + w <= WIDTH and 0 <= y < y + h <= HEIGHT):
             raise ValueError("Each annotated box must fit within the 320 × 180 image.")
+        if index == 0 and (x == 0 or y == 0 or x + w == WIDTH or y + h == HEIGHT):
+            raise ValueError("Choose an initial frame with the entire pet in view.")
     return content
 
 
@@ -39,7 +41,8 @@ def evaluate(clip, labels, frame_size):
         "ffmpeg", "-nostdin", "-v", "error", "-i", str(clip), "-vf",
         "fps=10,scale=320:180,format=gray", "-an", "-f", "rawvideo", "pipe:1",
     ], stdout=subprocess.PIPE)
-    successes = visible = 0
+    visible = 0
+    missed = []
     try:
         with ReplayClient() as client:
             scenario = Scenario(client)
@@ -57,7 +60,8 @@ def evaluate(clip, labels, frame_size):
                     scenario.control("heartbeat", index)
                 if label is not None:
                     visible += 1
-                    successes += overlap(status["box"], label) >= 0.5
+                    if overlap(status["box"], label) < 0.5:
+                        missed.append(index)
             if decoder.stdout.read(1):
                 raise ValueError("The clip has more frames than labels.")
         if decoder.wait() != 0:
@@ -67,7 +71,7 @@ def evaluate(clip, labels, frame_size):
         if decoder.poll() is None:
             decoder.terminate()
             decoder.wait()
-    return successes, visible
+    return missed, visible
 
 
 def main():
@@ -76,9 +80,13 @@ def main():
     parser.add_argument("labels", type=Path)
     args = parser.parse_args()
     labels = labels_from(args.labels)
-    successes, visible = evaluate(args.clip, labels, WIDTH * HEIGHT)
+    missed, visible = evaluate(args.clip, labels, WIDTH * HEIGHT)
+    successes = visible - len(missed)
     fraction = successes / visible
+    print(f"{len(labels)} labeled frames ({visible} visible)")
     print(f"{successes}/{visible} visible frames reached IoU >= 0.5 ({fraction:.1%})")
+    if missed:
+        print("Visible frames below threshold (1-based):", ", ".join(map(str, missed)))
     return 0 if fraction >= .9 else 1
 
 

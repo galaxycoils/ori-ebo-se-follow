@@ -71,6 +71,7 @@ const driver = crypto.getRandomValues(new Uint32Array(1))[0] || 1;
 let status = { state: "OFF", owner: 0, generation: 1, motion: "HOLD", revision: 0 };
 const retiredBoots = new Set();
 let displayed = { frame: 0, imageFrame: 0, image: null, box: null };
+let presented = null;
 let selection = null;
 let startPoint = null;
 let lastTag = "";
@@ -171,6 +172,8 @@ function apply(next) {
   if (status.boot && next.boot !== status.boot) {
     retiredBoots.add(status.boot);
     selection = null;
+    if (presented?.image !== displayed.image) presented?.image.close();
+    presented = null;
     displayed.frame = 0;
     displayed.box = null;
     hint = "";
@@ -183,15 +186,39 @@ function apply(next) {
   update();
 }
 
-async function post(action, fields = {}, session = status) {
-  const response = await fetch("/api/" + action, {
-    signal: AbortSignal.timeout(2000),
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({driver, boot: session.boot, generation: session.generation, ...fields}),
+const transport = document.documentElement.dataset.preview === "pages"
+  ? import("./simulator.mjs").then(module => module.createSimulator())
+  : Promise.resolve({
+    async frame(previous) {
+      const response = await fetch("/api/frame", {
+        cache: "no-store", headers: {"If-None-Match": previous}, signal: AbortSignal.timeout(1200),
+      });
+      if (response.status === 204) return null;
+      if (!response.ok) throw new Error("Preview unavailable");
+      return {
+        tag: response.headers.get("ETag") || "",
+        frame: Number(response.headers.get("X-Frame-Id")),
+        status: JSON.parse(response.headers.get("X-Ori-Status")),
+        image: async () => createImageBitmap(await response.blob()),
+        discard: () => response.body.cancel(),
+      };
+    },
+    async control(action, payload) {
+      const response = await fetch("/api/" + action, {
+        signal: AbortSignal.timeout(2000),
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error("Control request failed");
+      return response.json();
+    },
   });
-  if (!response.ok) throw new Error("Control request failed");
-  const result = await response.json();
+
+async function post(action, fields = {}, session = status) {
+  const result = await (await transport).control(action, {
+    driver, boot: session.boot, generation: session.generation, ...fields,
+  });
   apply(result);
   return result.accepted;
 }
@@ -202,13 +229,14 @@ async function refresh() {
     return;
   }
   try {
-    const response = await fetch("/api/frame", {cache: "no-store", headers: {"If-None-Match": lastTag}, signal: AbortSignal.timeout(1200)});
-    if (response.status === 204) return;
-    if (!response.ok) throw new Error("Preview unavailable");
-    lastTag = response.headers.get("ETag") || "";
-    const frame = Number(response.headers.get("X-Frame-Id"));
-    const next = JSON.parse(response.headers.get("X-Ori-Status"));
-    if (retiredBoots.has(next.boot)) return;
+    const preview = await (await transport).frame(lastTag);
+    if (!preview) return;
+    lastTag = preview.tag;
+    const {frame, status: next} = preview;
+    if (retiredBoots.has(next.boot)) {
+      await preview.discard();
+      return;
+    }
     if (status.boot && next.boot !== status.boot) apply(next);
     if (selection && (frame - selection.frame >= 20 || performance.now() >= selection.deadline)) {
       selection = null;
@@ -217,11 +245,11 @@ async function refresh() {
     }
     if (frame !== displayed.imageFrame || displayed.boot !== next.boot) {
       if (selection) {
-        await response.body.cancel();
+        await preview.discard();
         apply(next);
         return;
       }
-      const image = await createImageBitmap(await response.blob());
+      const image = await preview.image();
       if (!selection && !document.hidden && !retiredBoots.has(next.boot)) {
         // Acknowledge after a rendering opportunity, using the painted frame ID.
         const previous = displayed.image;
@@ -232,14 +260,18 @@ async function refresh() {
         displayed.box = next.generation >= status.generation ? next.box : null;
         paint();
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          if (!selection && !document.hidden && displayed.image === image) displayed.frame = frame;
+          if (!selection && !document.hidden && displayed.image === image) {
+            if (presented?.image !== image) presented?.image.close();
+            displayed.frame = frame;
+            presented = {...displayed};
+          }
         }));
-        if (previous) previous.close();
+        if (previous !== presented?.image) previous?.close();
       } else {
         image.close();
       }
     } else {
-      await response.body.cancel();
+      await preview.discard();
     }
     fatal = "";
     apply(next);
@@ -260,9 +292,14 @@ function point(event) {
 }
 
 canvas.addEventListener("pointerdown", event => {
-  if (!event.isPrimary || event.button !== 0 || pending || (!selection && !previewIsLive()) || !displayed.imageFrame || !displayed.image || (status.owner && status.owner !== driver)
+  if (!event.isPrimary || event.button !== 0 || pending || (!selection && !previewIsLive()) ||
+      !presented || presented.boot !== status.boot || (status.owner && status.owner !== driver)
       || status.state === "FOLLOWING" || (status.dock !== "idle" && !status.can_home)) return;
-  // Freeze the canvas image and its ID so the user can confirm that exact frame.
+  // An image drawn since the last rendering opportunity may still be pending.
+  if (displayed.image !== presented.image) {
+    displayed.image?.close();
+    displayed = {...presented};
+  }
   dragging = Boolean(selection);
   startPoint = point(event);
   selection = {frame: displayed.imageFrame, session: status, deadline: selection?.deadline ?? performance.now() + 2000, box: [

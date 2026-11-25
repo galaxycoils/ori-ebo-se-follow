@@ -1,14 +1,19 @@
 # Implementation status
 
-| Task | State | Verification or dependency |
-|---|---|---|
-| Desktop core, steering, and session logic | Passed | `make test` and `make replay CASE=retreat` |
-| Phone-sized replay controls | Passed | `make test-browser` |
-| Return home and charge confirmation | Replay and phone demo tested | Physical first-attempt rate and time-to-charge require paired stock and integrated trials on Ori |
-| Real-camera tracking score | Pending | Ori footage and matched annotations for held-out evaluation |
-| Private GitHub repository | Blocked in this session | GitHub returned HTTP 403 `Resource not accessible by integration` for repository creation |
-| Native build, installation, and recovery | Blocked | Exact board and documented native toolchain, install, and restore route |
-| Track only on Ori | Pending | Native execution, camera source, and bench access |
-| Physical Follow on Ori | Pending | Verified drive expiry, factory ownership and veto interfaces, and measured robot trials |
+Highest verified feature milestone is **Desktop replay passed**. The GitHub Pages deployment is a simulator.
 
-Highest verified feature milestone is **Desktop replay passed**.
+| Plan item | Status and evidence | Next dependency |
+|---|---|---|
+| Stock baseline on Ori | Pending. No stock live video, manual drive, Stop, sleep, low-battery, or docking observations from this run. | Ori, its stock app, charged base, and a physical operator. Record each behavior before installing anything. |
+| Board, installation, toolchain, camera, drive, and recovery | Blocked. The reported hardware label is `Release`, IPC is `v1.7.7-0-g019e668a`, and MCU is `v0.0.35-0-gab98488`. The model support page and public source releases do not establish the matching native interfaces. The developer and recovery inquiry was sent to Enabot. | Enabot's exact board identification and supported, version-matched installation, removal, toolchain, camera, drive, telemetry, and recovery instructions. |
+| Motor-free native probe | Blocked. No native build ID, frame count, reboot, removal, or restored-stock baseline was verified. | Verified installation and recovery, then physical access to run the probe and repeat the baseline. |
+| Frame ingestion and phone controls | Desktop passed. `make test`, `make test-browser`, and `make test-pages` exercise timestamp and sequence checks, frame-specific selection and catch-up, stale preview, Track only, and session controls. | Verified native camera, installation ABI, and paired-owner authentication or owner HTTPS. The loopback server and the public Pages site both use generated frames. |
+| Tracking accuracy | Pending. `python3 tests/evaluate.py private/clip.mp4 private/clip.json` reports visible-frame IoU and frame failures. No Ori camera footage was available. | Separate tuned and held-out labeled clips for walking, turning, crouching, lighting, occlusion, and two pets crossing. Record visible-frame counts, failures, and the ordinary held-out score. |
+| Track only soak | Pending. No device latency, frame age, missed deadlines, memory, or wheel observations. | Native camera path and 30 minutes with stock video active on Ori. Verify still wheels and Follow off after reboot. |
+| Gap, steering, takeover, and Follow expiry | Desktop passed. `make replay CASE=retreat` shows HOLD → FORWARD → HOLD. Replay covers stable calibration, single and overlapping vetoes, old commands, lost targets, frozen video, and elapsed command expiry. | Verified factory motion owner, documented speed and independent expiry on the actual motor path, and live factory vetoes. |
+| Cradle and floor Follow | Pending. No physical drive cutoff, wheel-rotation, stopping distance, or settle measurements. | Native motion integration and recovery, then raised-wheel tests, five consecutive 1.2 m plush-target trials, and supervised pet trials. |
+| Return-to-charge logic | Desktop passed. Replay and browser tests cover return, Stop, simulated charging, late acknowledgment, and cutoff. Replay also covers missing telemetry, interrupted contact, stock low-battery return, and failure. | Verified factory request, cancel, docking, stationary/off-base, and charging/full-on-base feedback. Measure stock timing before adopting the replay settings. |
+| Return-to-charge trials | Pending separately from Follow. No physical trial successes, time-to-charge distribution, command count, or manual rescues. | 18 stock and 18 integrated starts across three distances and two angles. Compare first-attempt success, factory start count, Follow writes, and charging-time p90. |
+| GitHub and native packaging | The simulator has a reproducible WebAssembly build and GitHub Actions deployment on `ori-firmware-prototype`. | A native package, checksum, installation and removal commands, recovery evidence, and owner instructions require the device gates above. |
+
+The original-device procedures and acceptance thresholds are in the [device runbook](device.md). Vendor references are listed there.

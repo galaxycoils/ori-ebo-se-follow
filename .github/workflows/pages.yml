@@ -1,0 +1,50 @@
+name: Ori simulator
+
+on:
+  push:
+    branches: [ori-firmware-prototype]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ori-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test native replay
+        run: make test
+      - name: Install Emscripten and build the simulator
+        run: |
+          git clone --quiet --depth 1 --branch 4.0.23 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install 4.0.23
+          "$RUNNER_TEMP/emsdk/emsdk" activate 4.0.23
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          make pages
+      - name: Test phone controls
+        env:
+          NODE_PATH: ${{ runner.temp }}/ori-browser/node_modules
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ori-browser" playwright@1.58.2
+          "$RUNNER_TEMP/ori-browser/node_modules/.bin/playwright" install --with-deps chromium
+          make test-browser
+          ORI_TEST_PAGES=1 node tests/browser.cjs
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/pages
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      pages: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - id: pages
+        uses: actions/deploy-pages@v4

@@ -2,6 +2,8 @@
 
 A desktop-tested C++ prototype of on-device pet tracking and optional supervised Follow for the original Enabot EBO SE. Device installation, live pet footage, and physical movement are pending.
 
+[Open the GitHub Pages simulator](https://galaxycoils.github.io/ori-ebo-se-follow/). The public page runs the same C++ replay core in WebAssembly with generated frames. All movement and charging on that page are simulated.
+
 ## Run the replay and phone demo
 
 Install GNU Make, a C++17 compiler, and Python 3.9 or later. From the repository root run
@@ -16,7 +18,7 @@ The retreat fixture finishes with `HOLD → FORWARD → HOLD`. Open `http://127.
 
 The simulator uses generated images and wheel decisions. It needs no robot, SDK, private footage, or network service.
 
-With Playwright and Chromium installed, run `make test-browser` to start an isolated demo, exercise the phone controls, and shut it down automatically. Set `CHROMIUM` if the local binary is at a path other than `/usr/bin/chromium`.
+With Playwright and Chromium installed, run `make test-browser` to exercise the loopback demo. Set `CHROMIUM` to choose a browser executable. With Emscripten 4.0.23 active, run `make pages` to build the static site and `make test-pages` to exercise it. GitHub Actions runs the native replay and both browser checks before publishing.
 
 ## Return to the charging base
 
@@ -33,7 +35,7 @@ make
 python3 tests/evaluate.py private/walk.mp4 private/walk.json
 ```
 
-The evaluator reports the fraction of visible frames with intersection-over-union of at least 0.5 and passes at 90%. The generated replay tests exercise turns, Track only, target loss, ambiguity, interrupted sessions, delayed starts and stale frames. Use the real clips to evaluate the camera angle and appearance changes seen on Ori.
+The evaluator reports the count of labeled frames, the fraction of visible frames with intersection-over-union of at least 0.5, and the frame numbers below threshold. Use 90% as the threshold for ordinary unobstructed held-out clips. Record occlusion and two-pet crossings separately and keep any loss or suspect identity switch in the results. The generated replay tests exercise turns, Track only, target loss, ambiguity, interrupted sessions, delayed starts and stale frames.
 
 ## Device and tracking notes
 

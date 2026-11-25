@@ -1,6 +1,7 @@
 // Uses a fresh loopback demo unless ORI_DEMO_URL selects an existing server.
 const assert = require("node:assert/strict");
 const { chromium } = require("playwright");
+const { existsSync } = require("node:fs");
 
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
@@ -9,7 +10,7 @@ const path = require("node:path");
 
 async function testDemo(base) {
   const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM || "/usr/bin/chromium",
+    executablePath: process.env.CHROMIUM || (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
     headless: true,
   });
   try {
@@ -17,17 +18,25 @@ async function testDemo(base) {
     const errors = [];
     page.on("pageerror", error => errors.push(error));
     await page.goto(base);
+    await page.evaluate(async () => { await transport; });
     await page.waitForFunction(() => displayed.frame > 0 && status.boot);
-    const previousBoot = await page.request.post(base + "/api/stop", {
-      headers: { Origin: base },
-      data: { driver: 1, generation: 1, boot: "previous-instance" },
+    const isStatic = await page.evaluate(() => document.documentElement.dataset.preview === "pages");
+    const previousBoot = await page.evaluate(async () => {
+      const api = await transport;
+      return api.control("stop", {driver: 1, generation: 1, boot: "previous-instance"});
     });
-    assert.equal((await previousBoot.json()).accepted, false);
-    const crossOrigin = await page.request.post(base + "/api/stop", {
-      headers: { Origin: "https://example.com" },
-      data: {},
+    assert.equal(previousBoot.accepted, false);
+    if (!isStatic) {
+      const crossOrigin = await page.request.post(new URL("/api/stop", base).href, {
+        headers: { Origin: "https://example.com" },
+        data: {},
+      });
+      assert.equal(crossOrigin.status(), 403);
+    }
+    await page.evaluate(() => {
+      window.observedMotion = new Set();
+      setInterval(() => window.observedMotion.add(status.motion), 20);
     });
-    assert.equal(crossOrigin.status(), 403);
     const preview = page.locator("#preview");
     const position = await preview.evaluate(canvas => ({
       x: canvas.clientWidth * 0.5, y: canvas.clientHeight * 105 / 180,
@@ -55,33 +64,35 @@ async function testDemo(base) {
     await page.getByRole("button", { name: "Set gap here" }).click();
     await page.waitForFunction(() => status.state === "READY");
 
-    const observed = new Set();
-    page.on("response", response => {
-      const raw = response.headers()["x-ori-status"];
-      if (raw) observed.add(JSON.parse(raw).motion);
-    });
     await page.getByRole("button", { name: "Follow", exact: true }).click();
     await page.waitForFunction(() => status.state === "FOLLOWING");
     await page.waitForFunction(() => status.motion === "FORWARD");
-    assert(observed.has("LEFT"), "The moving target must first cause a turn");
+    assert(await page.evaluate(() => window.observedMotion.has("LEFT")), "The moving target must first cause a turn");
     await page.getByRole("button", { name: "Track only" }).click();
     await page.waitForFunction(() => status.state === "READY" && status.motion === "HOLD");
     await page.setViewportSize({ width: 844, height: 390 });
-    observed.clear();
+    await page.evaluate(() => window.observedMotion.clear());
     await page.getByRole("button", { name: "Move demo target" }).click();
     await page.waitForTimeout(3000);
-    assert.deepEqual([...observed], ["HOLD"]);
+    assert.deepEqual(await page.evaluate(() => [...window.observedMotion]), ["HOLD"]);
 
     await page.getByRole("button", { name: "Follow", exact: true }).click();
     await page.waitForFunction(() => status.state === "FOLLOWING");
-    await page.route("**/api/frame", route => route.abort());
+    await page.evaluate(async () => {
+      const api = await transport;
+      window.liveFrame = api.frame;
+      api.frame = () => { throw new Error("Preview interrupted for testing"); };
+    });
     await page.waitForTimeout(900);
-    const response = await page.request.get(base + "/api/frame");
-    const afterFreeze = JSON.parse(response.headers()["x-ori-status"]);
+    const afterFreeze = await page.evaluate(async () => {
+      const preview = await window.liveFrame("");
+      await preview.discard();
+      return preview.status;
+    });
     assert.equal(afterFreeze.reason, "preview-expired");
     assert.equal(afterFreeze.motion, "HOLD");
     assert.match(await page.locator("#motion").textContent(), /unknown/);
-    await page.unroute("**/api/frame");
+    await page.evaluate(async () => { (await transport).frame = window.liveFrame; });
     await page.waitForFunction(() => previewIsLive() && status.state === "OFF");
     await page.getByRole("button", { name: "Stop", exact: true }).click();
     await page.waitForFunction(() => status.reason === "owner-stop");
@@ -95,7 +106,7 @@ async function testDemo(base) {
     await page.getByRole("button", { name: "Lift off base (demo)" }).click();
     await page.waitForFunction(() => status.dock === "idle" && status.state === "OFF");
     assert.deepEqual(errors, []);
-    console.log("Phone-sized browser flow passed");
+    console.log(`Phone-sized browser flow passed (${isStatic ? "WebAssembly" : "loopback"})`);
   } finally {
     await browser.close();
   }
@@ -103,7 +114,11 @@ async function testDemo(base) {
 
 async function main() {
   if (process.env.ORI_DEMO_URL) return testDemo(process.env.ORI_DEMO_URL);
-  const server = spawn(process.env.PYTHON || "python3", ["demo/server.py", "--port", "0"], {
+  const pages = process.env.ORI_TEST_PAGES === "1";
+  const args = pages
+    ? ["-u", "-m", "http.server", "0", "--bind", "127.0.0.1", "--directory", "build/pages"]
+    : ["demo/server.py", "--port", "0"];
+  const server = spawn(process.env.PYTHON || "python3", args, {
     cwd: path.resolve(__dirname, ".."),
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -114,7 +129,9 @@ async function main() {
       once(lines, "line"),
       exited.then(([code]) => { throw new Error("Demo exited before startup: " + code); }),
     ]);
-    const address = line.match(/^Ori replay demo at (http:\/\/127\.0\.0\.1:\d+)$/);
+    const address = pages
+      ? line.match(/^Serving HTTP on 127\.0\.0\.1 port \d+ \((http:\/\/127\.0\.0\.1:\d+\/)\)/)
+      : line.match(/^Ori replay demo at (http:\/\/127\.0\.0\.1:\d+)$/);
     if (!address) throw new Error("Unexpected demo startup message");
     await testDemo(address[1]);
   } finally {

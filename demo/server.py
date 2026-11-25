@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from client import ReplayClient
-from fixtures import HEIGHT, REFERENCE, WIDTH, scene
+from fixtures import HEIGHT, MOVEMENT, REFERENCE, WIDTH, scene
 
 PAGE = Path(__file__).with_name("index.html")
 ACTIONS = {"select", "teach", "follow", "heartbeat", "track", "stop", "move", "home", "lift"}
@@ -33,9 +33,7 @@ def png(pixels):
 
 def movement(start):
     # Start from the visible pose, including when a second request interrupts a move.
-    legs = [((71, 65, 80, 80), 12), (REFERENCE, 12),
-            ((130, 63, 60, 60), 12), ((130, 63, 60, 60), 4), (REFERENCE, 12)]
-    for end, steps in legs:
+    for end, steps in MOVEMENT:
         for step in range(1, steps + 1):
             t = step / steps
             weight = t * t * (3 - 2 * t)

@@ -15,6 +15,10 @@ constexpr int imageHeight = 180;
 constexpr Milliseconds frameLifetime = 250;
 constexpr Milliseconds sessionLifetime = 750;
 constexpr Milliseconds selectionLifetime = 2000;
+constexpr Milliseconds dockAcknowledgement = 3000;
+constexpr Milliseconds dockReturnLimit = 60000;
+constexpr Milliseconds dockTelemetryLimit = 1500;
+constexpr Milliseconds dockChargeConfirmation = 1500;
 
 struct Box {
     int x, y, width, height;

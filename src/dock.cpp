@@ -33,7 +33,7 @@ bool Engine::dockInProgress() const {
 bool Engine::canRequestHome(Milliseconds now) const {
     return (dockState_ == DockState::Idle || dockState_ == DockState::Failed) &&
            dockSignal_ == DockSignal::Idle && dockSample_ >= 0 &&
-           now >= dockSample_ && now - dockSample_ <= 1500 && inhibits_.empty();
+           now >= dockSample_ && now - dockSample_ <= dockTelemetryLimit && inhibits_.empty();
 }
 
 bool Engine::requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
@@ -67,7 +67,7 @@ void Engine::observeDock(DockSignal signal, Milliseconds sampled) {
     if (sampled <= dockSample_) return;
     tick(sampled);
     const auto previous = dockSignal_;
-    const bool continuous = dockSample_ >= 0 && sampled - dockSample_ <= 1500;
+    const bool continuous = dockSample_ >= 0 && sampled - dockSample_ <= dockTelemetryLimit;
     dockSample_ = sampled;
     dockSignal_ = signal;
     if (signal != DockSignal::Charging || !continuous) chargeSince_ = -1;
@@ -79,11 +79,7 @@ void Engine::observeDock(DockSignal signal, Milliseconds sampled) {
     }
     if (signal == DockSignal::Idle) {
         // Give the factory time to acknowledge a newly submitted request.
-        if (dockState_ == DockState::Requested && sampled - dockStarted_ < 3000) return;
-        if (dockState_ == DockState::Requested) {
-            cancelDock(true);
-            return;
-        }
+        if (dockState_ == DockState::Requested) return;
         if (dockState_ == DockState::Stopping && dockAction_ == DockAction::Cancel) return;
         if (dockInProgress() || dockFailure_) dockState_ = DockState::Failed;
         else if (dockState_ != DockState::Failed) dockState_ = DockState::Idle;
@@ -109,7 +105,8 @@ void Engine::observeDock(DockSignal signal, Milliseconds sampled) {
     if (dockAction_ == DockAction::Start) dockAction_ = DockAction::None;
     if (signal == DockSignal::Charging) {
         if (chargeSince_ < 0) chargeSince_ = sampled;
-        if (sampled - chargeSince_ >= 1500) {
+        if (sampled - chargeSince_ >= dockChargeConfirmation) {
+            if (dockState_ == DockState::Stopping && dockAction_ == DockAction::Cancel) return;
             dockState_ = DockState::Charging;
             dockOwner_ = 0;
             dockFailure_ = false;

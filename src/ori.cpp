@@ -214,14 +214,19 @@ std::optional<Box> Engine::box() const {
 }
 
 void Engine::tick(Milliseconds now) {
-    if (dockState_ == DockState::Charging && now - dockSample_ > 1500) {
+    if (dockState_ == DockState::Charging && now - dockSample_ > dockTelemetryLimit) {
         dockState_ = DockState::Unknown;
         chargeSince_ = -1;
     }
     if (dockInProgress()) {
-        const bool stale = now - dockSample_ > 1500;
-        if (dockOwner_ && (stale || now - dockStarted_ >= 60000)) cancelDock(true);
-        else if (stale) dockState_ = DockState::Unknown;
+        const bool stale = now - dockSample_ > dockTelemetryLimit;
+        const bool missedAcknowledgement = dockState_ == DockState::Requested &&
+                                           now - dockStarted_ >= dockAcknowledgement;
+        if (dockOwner_ && (stale || missedAcknowledgement || now - dockStarted_ >= dockReturnLimit)) {
+            cancelDock(true);
+        } else if (stale) {
+            dockState_ = DockState::Unknown;
+        }
     }
     if (owner_ == 0) return;
     if (now >= heartbeatDeadline_) {
@@ -292,6 +297,7 @@ bool Engine::select(std::uint64_t driver, std::uint64_t generation, std::uint64_
         }
     }
     owner_ = driver;
+    displayed_ = frameId;
     heartbeatDeadline_ = now + sessionLifetime;
     state_ = State::Tracking;
     calibration_.push_back(tracker_.box());

@@ -1,15 +1,20 @@
-"""Serve the desktop demo on loopback. All tracking runs in the native core."""
+"""Serve the desktop demo on loopback or authenticated LAN/HTTPS. All tracking runs in the native core."""
 
 import argparse
+from http.cookies import SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
+from pathlib import Path
 import secrets
+import shutil
+import ssl
 import struct
+import subprocess
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 import zlib
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from urllib.parse import urlsplit
 
 from client import ReplayClient
 from fixtures import HEIGHT, MOVEMENT, REFERENCE, WIDTH, scene
@@ -17,6 +22,15 @@ from fixtures import HEIGHT, MOVEMENT, REFERENCE, WIDTH, scene
 PAGE = Path(__file__).with_name("index.html")
 ACTIONS = {"select", "teach", "follow", "heartbeat", "track", "stop", "move", "home", "lift"}
 FRAME_INTERVAL = 0.1
+FRAME_BYTES = WIDTH * HEIGHT
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def find_ffmpeg():
+    for candidate in (os.environ.get("FFMPEG"), shutil.which("ffmpeg")):
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def png(pixels):
@@ -24,7 +38,13 @@ def png(pixels):
         return (struct.pack(">I", len(data)) + kind + data
                 + struct.pack(">I", zlib.crc32(kind + data)))
 
-    rows = b"".join(b"\0" + pixels[i:i + WIDTH] for i in range(0, len(pixels), WIDTH))
+    view = memoryview(pixels)
+    stride = WIDTH + 1
+    rows = bytearray(HEIGHT * stride)
+    for row in range(HEIGHT):
+        src = row * WIDTH
+        dst = row * stride + 1
+        rows[dst:dst + WIDTH] = view[src:src + WIDTH]
     return (b"\x89PNG\r\n\x1a\n"
             + chunk(b"IHDR", struct.pack(">IIBBBBB", WIDTH, HEIGHT, 8, 0, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(rows, level=3))
@@ -41,9 +61,43 @@ def movement(start):
         start = end
 
 
+class VideoSource:
+    def __init__(self, source):
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            raise RuntimeError("FFmpeg is required for --video mode")
+        command = [ffmpeg, "-nostdin", "-v", "error", "-re"]
+        if Path(source).exists():
+            command.extend(["-stream_loop", "-1"])
+        command.extend([
+            "-i", source,
+            "-vf", f"fps=10,scale={WIDTH}:{HEIGHT},format=gray",
+            "-an", "-f", "rawvideo", "pipe:1",
+        ])
+        self.process = subprocess.Popen(command, stdout=subprocess.PIPE)
+
+    def read(self):
+        data = self.process.stdout.read(FRAME_BYTES)
+        if len(data) != FRAME_BYTES:
+            raise RuntimeError("Video stream ended")
+        return data
+
+    def close(self):
+        if self.process.stdout:
+            self.process.stdout.close()
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+
+
 class Demo:
-    def __init__(self, replay):
+    def __init__(self, replay, video=None):
         self.replay = replay
+        self.video = video
         self.lock = threading.Lock()
         self.new_frame = threading.Condition(self.lock)
         self.finished = threading.Event()
@@ -55,6 +109,9 @@ class Demo:
         self.return_started = None
         self.box = REFERENCE
         self.movement = iter(())
+        self._cached_box = None
+        self._cached_pixels = b""
+        self._cached_png = b""
 
     @staticmethod
     def now():
@@ -70,9 +127,25 @@ class Demo:
         self.status = {**status, "boot": self.boot, "revision": self.revision}
 
     def capture(self):
+        if self.video is not None:
+            pixels = self.video.read()
+            image = png(pixels)
+        else:
+            with self.lock:
+                box = next(self.movement, REFERENCE)
+                self.box = box
+                same_scene = box == self._cached_box
+                if same_scene:
+                    pixels = self._cached_pixels
+                    image = self._cached_png
+            if not same_scene:
+                pixels = bytes(scene(box))
+                image = png(pixels)
+                self._cached_box = box
+                self._cached_pixels = pixels
+                self._cached_png = image
+
         with self.lock:
-            self.box = next(self.movement, REFERENCE)
-            pixels = scene(self.box)
             now = self.now()
             # These are simulated factory telemetry samples, never wheel commands.
             elapsed = 0 if self.return_started is None else now - self.return_started
@@ -82,13 +155,17 @@ class Demo:
             self.record(self.replay.call("dock-status", now, signal))
             self.seq += 1
             self.record(self.replay.call("frame", now, self.seq, now, pixels=pixels))
-            self.image = png(bytes(pixels))
+            self.image = image
             self.new_frame.notify_all()
 
     def run(self):
         deadline = time.monotonic() + FRAME_INTERVAL
         while not self.finished.wait(max(0, deadline - time.monotonic())):
-            self.capture()
+            try:
+                self.capture()
+            except RuntimeError:
+                self.finished.set()
+                break
             deadline += FRAME_INTERVAL
             if deadline < time.monotonic():
                 deadline = time.monotonic() + FRAME_INTERVAL
@@ -135,6 +212,33 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def valid_host(self):
+        host = self.headers.get("Host")
+        if not host:
+            return False
+        if self.server.wildcard:
+            return host.endswith(f":{self.server.server_port}")
+        return host == self.server.host
+
+    def authenticated(self):
+        token = self.server.token
+        if not token:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer ") and secrets.compare_digest(auth[7:], token):
+            return True
+        raw_cookie = self.headers.get("Cookie", "")
+        if raw_cookie:
+            cookie = SimpleCookie()
+            try:
+                cookie.load(raw_cookie)
+            except Exception:
+                return False
+            morsel = cookie.get("ori_owner")
+            if morsel and secrets.compare_digest(morsel.value, token):
+                return True
+        return False
+
     def response(self, status, data, content_type, headers=()):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -147,16 +251,35 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(name, value)
         try:
             self.end_headers()
-            self.wfile.write(data)
+            if data:
+                self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError):
             # A closed tab can cancel a request while it waits for a new frame.
             self.close_connection = True
 
     def do_GET(self):
-        if self.headers.get("Host") != self.server.host:
+        if not self.valid_host():
             self.send_error(403)
             return
-        path = urlsplit(self.path).path
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        if path == "/" and self.server.token:
+            query = parse_qs(parsed.query)
+            if "token" in query:
+                supplied = query["token"][0]
+                if secrets.compare_digest(supplied, self.server.token):
+                    secure = "; Secure" if self.server.tls else ""
+                    cookie = f"ori_owner={self.server.token}; Path=/; HttpOnly; SameSite=Strict{secure}"
+                    self.response(303, b"", "text/plain; charset=utf-8", [
+                        ("Location", "/"),
+                        ("Set-Cookie", cookie),
+                    ])
+                else:
+                    self.send_error(401)
+                return
+        if not self.authenticated():
+            self.send_error(401)
+            return
         if path == "/":
             self.response(200, PAGE.read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/frame":
@@ -180,9 +303,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        if (self.headers.get("Host") != self.server.host
-                or self.headers.get("Origin") != f"http://{self.server.host}"):
+        if not self.valid_host():
             self.send_error(403)
+            return
+        scheme = "https" if self.server.tls else "http"
+        host = self.headers.get("Host", "")
+        if self.headers.get("Origin") != f"{scheme}://{host}":
+            self.send_error(403)
+            return
+        if not self.authenticated():
+            self.send_error(401)
             return
         path = urlsplit(self.path).path
         action = path.removeprefix("/api/")
@@ -200,24 +330,59 @@ class Handler(BaseHTTPRequestHandler):
         self.response(200, json.dumps(status).encode(), "application/json")
 
 
+def format_host(bind, port):
+    if ":" in bind and not bind.startswith("["):
+        return f"[{bind}]:{port}"
+    return f"{bind}:{port}"
+
+
 def main():
-    args = argparse.ArgumentParser()
-    args.add_argument("--port", type=int, default=8765)
-    options = args.parse_args()
-    with ReplayClient() as replay, ThreadingHTTPServer(("127.0.0.1", options.port), Handler) as server:
-        server.host = f"127.0.0.1:{server.server_port}"
-        server.demo = Demo(replay)
-        server.demo.capture()
-        producer = threading.Thread(target=server.demo.run)
-        producer.start()
-        print(f"Ori replay demo at http://{server.host}", flush=True)
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server.demo.finished.set()
-            producer.join()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bind", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--token", default="")
+    parser.add_argument("--require-auth", action="store_true")
+    parser.add_argument("--tls-cert", default="")
+    parser.add_argument("--tls-key", default="")
+    parser.add_argument("--video", default="")
+    options = parser.parse_args()
+
+    if bool(options.tls_cert) != bool(options.tls_key):
+        raise SystemExit("Provide both --tls-cert and --tls-key to enable HTTPS")
+    if options.bind not in LOOPBACK_HOSTS and not (options.token or options.require_auth):
+        raise SystemExit("Refusing non-loopback bind without --require-auth or --token")
+
+    token = options.token or (secrets.token_urlsafe(24) if options.require_auth else "")
+    video = VideoSource(options.video) if options.video else None
+    try:
+        with ReplayClient() as replay, ThreadingHTTPServer((options.bind, options.port), Handler) as server:
+            server.tls = bool(options.tls_cert)
+            if server.tls:
+                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                context.load_cert_chain(certfile=options.tls_cert, keyfile=options.tls_key)
+                server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.token = token
+            server.wildcard = options.bind in {"0.0.0.0", "::"}
+            display_bind = "127.0.0.1" if options.bind == "0.0.0.0" else "::1" if options.bind == "::" else options.bind
+            server.host = format_host(display_bind, server.server_port)
+            server.demo = Demo(replay, video=video)
+            server.demo.capture()
+            producer = threading.Thread(target=server.demo.run)
+            producer.start()
+            scheme = "https" if server.tls else "http"
+            print(f"Ori replay demo at {scheme}://{server.host}", flush=True)
+            if token:
+                print(f"Owner pairing URL: {scheme}://{server.host}/?token={token}", flush=True)
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            finally:
+                server.demo.finished.set()
+                producer.join()
+    finally:
+        if video is not None:
+            video.close()
 
 
 if __name__ == "__main__":

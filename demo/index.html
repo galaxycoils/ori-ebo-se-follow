@@ -38,7 +38,7 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
 <main>
   <header><div><h1>Ori</h1><span class="mode">Desktop replay demo</span></div><button id="stop">Stop</button></header>
   <section class="card" aria-label="Preview and tracking controls">
-    <canvas id="preview" width="320" height="180" aria-label="Demo live preview. Tap or drag to select the target."></canvas>
+    <canvas id="preview" width="320" height="180" tabindex="0" aria-label="Demo live preview. Tap, drag, or press Enter to select the target."></canvas>
     <div class="controls">
       <p id="status" role="status">Waiting for the preview</p>
       <div class="actions">
@@ -127,7 +127,8 @@ function update() {
   const busy = (status.owner && !owner) || (status.dock_owner && status.dock_owner !== driver);
   const live = previewIsLive();
   const previewMessage = displayed.image ? "Waiting for live video" : "Connecting to preview";
-  const stateLabel = busy ? "Controlled by another tab" : dockLabels[status.dock] || labels[status.state];
+  const showDock = Boolean(dockLabels[status.dock]) && (status.dock !== "failed" || status.state === "OFF");
+  const stateLabel = busy ? "Controlled by another tab" : showDock ? dockLabels[status.dock] : labels[status.state];
   const feedback = pending === "stop" ? "Stopping…" : pending === "select" ? "Selecting target…" : "";
   setText(statusText, fatal || feedback || (selection ? "Adjust selection" : !live ? previewMessage : hint || stateLabel));
   setText(motion, "Simulated motion · " + (live ? status.motion : "unknown"));
@@ -150,7 +151,7 @@ function update() {
   buttons.home.disabled = Boolean(busy || pending) || !live;
   buttons.lift.hidden = status.dock !== "charging";
   buttons.lift.disabled = Boolean(pending) || !live;
-  if (dockLabels[status.dock]) {
+  if (showDock) {
     const dockHelp = {
       requested: "Waiting for the factory controller.",
       returning: "The factory controller has the wheels.",
@@ -182,7 +183,12 @@ function apply(next) {
     selection = null;
     startPoint = null;
   }
+  const previousBox = displayed.box;
   status = next;
+  if (!selection && displayed.boot === next.boot) {
+    displayed.box = next.box ?? null;
+  }
+  if (previousBox !== displayed.box) paint();
   update();
 }
 
@@ -291,10 +297,22 @@ function point(event) {
   ];
 }
 
+function clampBox(x, y, width, height) {
+  const w = Math.min(318, Math.max(12, Math.round(width)));
+  const h = Math.min(178, Math.max(12, Math.round(height)));
+  const bx = Math.min(319 - w, Math.max(1, Math.round(x)));
+  const by = Math.min(179 - h, Math.max(1, Math.round(y)));
+  return [bx, by, w, h];
+}
+
+function canBeginSelection() {
+  return !pending && (Boolean(selection) || previewIsLive()) &&
+    presented && presented.boot === status.boot && !(status.owner && status.owner !== driver) &&
+    status.state !== "FOLLOWING" && !(status.dock !== "idle" && !status.can_home);
+}
+
 canvas.addEventListener("pointerdown", event => {
-  if (!event.isPrimary || event.button !== 0 || pending || (!selection && !previewIsLive()) ||
-      !presented || presented.boot !== status.boot || (status.owner && status.owner !== driver)
-      || status.state === "FOLLOWING" || (status.dock !== "idle" && !status.can_home)) return;
+  if (!event.isPrimary || event.button !== 0 || !canBeginSelection()) return;
   // An image drawn since the last rendering opportunity may still be pending.
   if (displayed.image !== presented.image) {
     displayed.image?.close();
@@ -302,11 +320,12 @@ canvas.addEventListener("pointerdown", event => {
   }
   dragging = Boolean(selection);
   startPoint = point(event);
-  selection = {frame: displayed.imageFrame, session: status, deadline: selection?.deadline ?? performance.now() + 2000, box: [
-    Math.min(239, Math.max(1, startPoint[0] - 40)),
-    Math.min(99, Math.max(1, startPoint[1] - 40)),
-    80, 80,
-  ]};
+  selection = {
+    frame: displayed.imageFrame,
+    session: status,
+    deadline: selection?.deadline ?? performance.now() + 2000,
+    box: clampBox(startPoint[0] - 40, startPoint[1] - 40, 80, 80),
+  };
   hint = "";
   canvas.setPointerCapture(event.pointerId);
   paint();
@@ -318,9 +337,9 @@ canvas.addEventListener("pointermove", event => {
   const end = point(event);
   const width = Math.abs(end[0] - startPoint[0]);
   const height = Math.abs(end[1] - startPoint[1]);
-  if (Math.max(width, height) >= 8) dragging = true;
   if (width < 12 || height < 12) return;
-  selection.box = [Math.min(end[0], startPoint[0]), Math.min(end[1], startPoint[1]), width, height];
+  dragging = true;
+  selection.box = clampBox(Math.min(end[0], startPoint[0]), Math.min(end[1], startPoint[1]), width, height);
   paint();
 });
 canvas.addEventListener("pointerup", event => {
@@ -333,6 +352,33 @@ canvas.addEventListener("pointercancel", event => {
   startPoint = selection = null;
   update();
   paint();
+});
+canvas.addEventListener("keydown", event => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  if (selection) {
+    confirmSelection();
+    return;
+  }
+  if (!canBeginSelection()) return;
+  if (displayed.image !== presented.image) {
+    displayed.image?.close();
+    displayed = {...presented};
+  }
+  selection = {
+    frame: displayed.imageFrame,
+    session: status,
+    deadline: performance.now() + 2000,
+    box: clampBox(120, 65, 80, 80),
+  };
+  confirmSelection();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && selection) {
+    startPoint = selection = null;
+    update();
+    paint();
+  }
 });
 
 async function command(action, fields = {}, session = status) {

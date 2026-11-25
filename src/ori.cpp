@@ -110,14 +110,13 @@ Decision Steering::update(Box box) {
 }
 
 std::optional<Tracker::Patch> Tracker::readPatch(const Frame& frame, Box box) {
-    if (!box.visible()) return std::nullopt;
-    constexpr int side = 12;
+    if (!box.visible() || frame.pixels.size() != imageSize) return std::nullopt;
     Patch patch{};
-    for (int row = 0; row < side; ++row) {
-        const int y = box.y + (2 * row + 1) * box.height / (2 * side);
-        for (int column = 0; column < side; ++column) {
-            const int x = box.x + (2 * column + 1) * box.width / (2 * side);
-            patch[row * side + column] = frame.pixels[y * imageWidth + x];
+    for (int row = 0; row < patchSide; ++row) {
+        const int y = box.y + (2 * row + 1) * box.height / (2 * patchSide);
+        for (int column = 0; column < patchSide; ++column) {
+            const int x = box.x + (2 * column + 1) * box.width / (2 * patchSide);
+            patch[row * patchSide + column] = frame.pixels[y * imageWidth + x];
         }
     }
     const double mean = std::accumulate(patch.begin(), patch.end(), 0.0) / patch.size();
@@ -132,8 +131,30 @@ std::optional<Tracker::Patch> Tracker::readPatch(const Frame& frame, Box box) {
     return patch;
 }
 
-double Tracker::similarity(const Patch& left, const Patch& right) {
-    return std::inner_product(left.begin(), left.end(), right.begin(), 0.0);
+std::optional<double> Tracker::scoreBox(const Frame& frame, Box box,
+                                        const std::array<int, patchSide>& rowOffsets,
+                                        const std::array<int, patchSide>& colOffsets) const {
+    const std::uint8_t* pixels = frame.pixels.data();
+    int sum = 0;
+    int sumSq = 0;
+    double dotRecent = 0.0;
+    double dotOriginal = 0.0;
+    int index = 0;
+    for (int row = 0; row < patchSide; ++row) {
+        const std::uint8_t* rowPtr = pixels + (box.y + rowOffsets[row]) * imageWidth + box.x;
+        for (int col = 0; col < patchSide; ++col, ++index) {
+            const int value = rowPtr[colOffsets[col]];
+            sum += value;
+            sumSq += value * value;
+            dotRecent += value * recent_[index];
+            dotOriginal += value * original_[index];
+        }
+    }
+    constexpr double count = static_cast<double>(patchSide * patchSide);
+    const double mean = sum / count;
+    const double energy = sumSq - sum * mean;
+    if (energy < count * 36.0) return std::nullopt;
+    return std::min(dotRecent, dotOriginal) / std::sqrt(energy);
 }
 
 bool Tracker::select(const Frame& frame, Box box) {
@@ -145,36 +166,57 @@ bool Tracker::select(const Frame& frame, Box box) {
 }
 
 bool Tracker::update(const Frame& frame) {
-    struct Candidate { Box box; double score; };
-    std::vector<Candidate> candidates;
-    candidates.reserve(3 * 21 * 29 + 8);
-    const auto score = [&](Box box) {
-        const auto patch = readPatch(frame, box);
-        if (patch) {
-            const double score = std::min(similarity(*patch, recent_), similarity(*patch, original_));
-            candidates.push_back({box, score});
+    if (frame.pixels.size() != imageSize) return false;
+    candidates_.clear();
+    candidates_.reserve(3 * 21 * 29 + 8);
+    const auto fillOffsets = [](int size, std::array<int, patchSide>& offsets) {
+        for (int i = 0; i < patchSide; ++i) {
+            offsets[i] = (2 * i + 1) * size / (2 * patchSide);
         }
     };
+    std::array<int, patchSide> rowOffsets{};
+    std::array<int, patchSide> colOffsets{};
     for (double scale : {0.9, 1.0, 1.1}) {
         const int width = std::lround(box_.width * scale);
         const int height = std::lround(box_.height * scale);
-        const int x = box_.x + (box_.width - width) / 2;
-        const int y = box_.y + (box_.height - height) / 2;
+        if (width < 12 || height < 12 || width > imageWidth - 2 || height > imageHeight - 2) {
+            continue;
+        }
+        fillOffsets(width, colOffsets);
+        fillOffsets(height, rowOffsets);
+        const int baseX = box_.x + (box_.width - width) / 2;
+        const int baseY = box_.y + (box_.height - height) / 2;
         for (int dy = -20; dy <= 20; dy += 2) {
-            for (int dx = -28; dx <= 28; dx += 2) score({x + dx, y + dy, width, height});
+            const int y = baseY + dy;
+            if (y <= 0 || y >= imageHeight - height) continue;
+            for (int dx = -28; dx <= 28; dx += 2) {
+                const int x = baseX + dx;
+                if (x <= 0 || x >= imageWidth - width) continue;
+                const Box candidate{x, y, width, height};
+                if (const auto score = scoreBox(frame, candidate, rowOffsets, colOffsets)) {
+                    candidates_.push_back({candidate, *score});
+                }
+            }
         }
     }
-    if (candidates.empty()) return false;
+    if (candidates_.empty()) return false;
     const auto strongest = [](const Candidate& a, const Candidate& b) { return a.score < b.score; };
-    const Box coarse = std::max_element(candidates.begin(), candidates.end(), strongest)->box;
+    const Box coarse = std::max_element(candidates_.begin(), candidates_.end(), strongest)->box;
+    fillOffsets(coarse.width, colOffsets);
+    fillOffsets(coarse.height, rowOffsets);
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
-            if (dx != 0 || dy != 0) score({coarse.x + dx, coarse.y + dy, coarse.width, coarse.height});
+            if (dx == 0 && dy == 0) continue;
+            const Box neighbor{coarse.x + dx, coarse.y + dy, coarse.width, coarse.height};
+            if (!neighbor.visible()) continue;
+            if (const auto score = scoreBox(frame, neighbor, rowOffsets, colOffsets)) {
+                candidates_.push_back({neighbor, *score});
+            }
         }
     }
-    const auto best = *std::max_element(candidates.begin(), candidates.end(), strongest);
+    const auto best = *std::max_element(candidates_.begin(), candidates_.end(), strongest);
     if (best.score < 0.75) return false;
-    for (const auto& alternate : candidates) {
+    for (const auto& alternate : candidates_) {
         if (best.score - alternate.score >= 0.10) continue;
         const Box other = alternate.box;
         const int overlapWidth = std::max(0, std::min(best.box.x + best.box.width, other.x + other.width)
@@ -192,6 +234,13 @@ bool Tracker::update(const Frame& frame) {
 
 bool Engine::owns(std::uint64_t driver, std::uint64_t generation) const {
     return driver != 0 && driver == owner_ && generation == generation_;
+}
+
+std::optional<Milliseconds> Engine::frameCaptured(std::uint64_t frameId) const {
+    const auto it = std::find_if(frames_.begin(), frames_.end(),
+                                 [frameId](const Frame& f) { return f.id == frameId; });
+    if (it == frames_.end()) return std::nullopt;
+    return it->captured;
 }
 
 void Engine::hold(std::string_view reason) {
@@ -214,17 +263,28 @@ std::optional<Box> Engine::box() const {
 }
 
 void Engine::tick(Milliseconds now) {
-    if (dockState_ == DockState::Charging && now - dockSample_ > dockTelemetryLimit) {
+    lastNow_ = std::max(lastNow_, now);
+    const bool dockStale = dockSample_ < 0 || now - dockSample_ > dockTelemetryLimit;
+    if (dockState_ == DockState::Charging && dockStale) {
         dockState_ = DockState::Unknown;
         chargeSince_ = -1;
     }
+    if (dockState_ == DockState::Stopping && dockAction_ == DockAction::None) {
+        if (dockStale) {
+            dockState_ = DockState::Unknown;
+            dockOwner_ = 0;
+        } else if (now - dockStoppedAt_ >= dockAcknowledgement) {
+            dockState_ = DockState::Failed;
+            dockFailure_ = false;
+            dockOwner_ = 0;
+        }
+    }
     if (dockInProgress()) {
-        const bool stale = now - dockSample_ > dockTelemetryLimit;
         const bool missedAcknowledgement = dockState_ == DockState::Requested &&
                                            now - dockStarted_ >= dockAcknowledgement;
-        if (dockOwner_ && (stale || missedAcknowledgement || now - dockStarted_ >= dockReturnLimit)) {
-            cancelDock(true);
-        } else if (stale) {
+        if (dockOwner_ && (dockStale || missedAcknowledgement || now - dockStarted_ >= dockReturnLimit)) {
+            cancelDock(true, now);
+        } else if (dockStale) {
             dockState_ = DockState::Unknown;
         }
     }
@@ -247,7 +307,7 @@ void Engine::tick(Milliseconds now) {
 void Engine::frame(Frame frame, Milliseconds now) {
     tick(now);
     if (frame.id == 0 || frame.captured < 0 || frame.captured > now ||
-        now - frame.captured >= frameLifetime ||
+        now - frame.captured >= frameLifetime || frame.pixels.size() != imageSize ||
         (!frames_.empty() && (frame.id <= frames_.back().id || frame.captured <= frames_.back().captured))) {
         if (box()) clear(State::Lost, "invalid-frame");
         return;
@@ -295,6 +355,10 @@ bool Engine::select(std::uint64_t driver, std::uint64_t generation, std::uint64_
             clear(State::Lost, "selection-uncertain");
             return false;
         }
+    }
+    if (dockState_ == DockState::Failed) {
+        dockState_ = DockState::Idle;
+        dockFailure_ = false;
     }
     owner_ = driver;
     displayed_ = frameId;
@@ -380,9 +444,18 @@ bool Engine::heartbeat(std::uint64_t driver, std::uint64_t generation, std::uint
     return true;
 }
 
-bool Engine::stop(std::uint64_t driver) {
-    if ((owner_ != 0 && owner_ != driver) || (dockOwner_ != 0 && dockOwner_ != driver)) return false;
-    if (dockInProgress()) cancelDock(false);
+bool Engine::stop(std::uint64_t driver, Milliseconds now) {
+    if (driver == 0 || (owner_ != 0 && owner_ != driver) || (dockOwner_ != 0 && dockOwner_ != driver)) {
+        return false;
+    }
+    const Milliseconds effectiveNow = now >= 0 ? now : lastNow_;
+    lastNow_ = std::max(lastNow_, effectiveNow);
+    if (dockInProgress()) {
+        cancelDock(false, effectiveNow);
+    } else if (dockState_ == DockState::Failed && dockSignal_ == DockSignal::Idle) {
+        dockState_ = DockState::Idle;
+        dockFailure_ = false;
+    }
     clear(State::Off, inhibits_.empty() ? "owner-stop" : name(*inhibits_.begin()));
     return true;
 }
@@ -390,7 +463,7 @@ bool Engine::stop(std::uint64_t driver) {
 void Engine::setInhibit(Inhibit cause, bool active) {
     if (active) {
         if ((cause == Inhibit::Manual || cause == Inhibit::Sleep || cause == Inhibit::Obstacle)
-                && dockOwner_ && dockInProgress()) cancelDock(false);
+                && dockOwner_ && dockInProgress()) cancelDock(false, lastNow_);
         if (!inhibits_.insert(cause).second) return;
     } else if (!inhibits_.erase(cause)) {
         return;

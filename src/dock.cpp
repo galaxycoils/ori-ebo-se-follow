@@ -55,8 +55,9 @@ DockAction Engine::takeDockAction() {
     return action;
 }
 
-void Engine::cancelDock(bool failure) {
+void Engine::cancelDock(bool failure, Milliseconds now) {
     dockFailure_ = failure;
+    dockStoppedAt_ = now;
     dockState_ = DockState::Stopping;
     dockAction_ = DockAction::Cancel;
 }
@@ -72,8 +73,11 @@ void Engine::observeDock(DockSignal signal, Milliseconds sampled) {
     dockSignal_ = signal;
     if (signal != DockSignal::Charging || !continuous) chargeSince_ = -1;
     if (signal == DockSignal::Unknown) {
-        if (dockOwner_ && dockInProgress()) cancelDock(true);
-        else if (dockState_ != DockState::Stopping) dockState_ = DockState::Unknown;
+        if (dockOwner_ && dockInProgress()) cancelDock(true, sampled);
+        else if (dockState_ != DockState::Stopping || dockAction_ == DockAction::None) {
+            dockState_ = DockState::Unknown;
+            dockOwner_ = 0;
+        }
         setInhibit(Inhibit::ReturnHome, true);
         return;
     }
@@ -81,8 +85,12 @@ void Engine::observeDock(DockSignal signal, Milliseconds sampled) {
         // Give the factory time to acknowledge a newly submitted request.
         if (dockState_ == DockState::Requested) return;
         if (dockState_ == DockState::Stopping && dockAction_ == DockAction::Cancel) return;
-        if (dockInProgress() || dockFailure_) dockState_ = DockState::Failed;
-        else if (dockState_ != DockState::Failed) dockState_ = DockState::Idle;
+        if (dockInProgress() || dockFailure_) {
+            dockState_ = DockState::Failed;
+            dockFailure_ = false;
+        } else if (dockState_ != DockState::Failed) {
+            dockState_ = DockState::Idle;
+        }
         dockOwner_ = 0;
         dockAction_ = DockAction::None;
         setInhibit(Inhibit::ReturnHome, false);
@@ -92,8 +100,11 @@ void Engine::observeDock(DockSignal signal, Milliseconds sampled) {
     setInhibit(Inhibit::ReturnHome, true);
     if (signal == DockSignal::Failed) {
         dockFailure_ = true;
-        if (dockOwner_ && dockInProgress()) cancelDock(true);
-        else if (dockState_ != DockState::Stopping) dockState_ = DockState::Failed;
+        if (dockOwner_ && dockInProgress()) cancelDock(true, sampled);
+        else if (dockState_ != DockState::Stopping || dockAction_ == DockAction::None) {
+            dockState_ = DockState::Failed;
+            dockOwner_ = 0;
+        }
         return;
     }
     if (dockState_ == DockState::Stopping && signal != DockSignal::Charging) return;

@@ -1,10 +1,13 @@
 #include "ori.hpp"
 
+#include <algorithm>
+#include <array>
 #include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -37,14 +40,14 @@ void report(std::ostream& reply, ori::Engine& engine, bool accepted, ori::Millis
 
 struct Replay {
     ori::Engine engine;
-    ori::Milliseconds previousNow = 0;
+    ori::Milliseconds previousNow = -1;
 
     bool run(const std::string& line, const std::function<bool(ori::Frame&)>& readFrame,
              std::ostream& reply) {
         std::istringstream input(line);
         std::string command;
         ori::Milliseconds now;
-        if (!(input >> command >> now) || now < previousNow) return false;
+        if (!(input >> command >> now) || now < 0 || now < previousNow) return false;
         previousNow = now;
         bool accepted = true;
         if (command == "frame") {
@@ -96,7 +99,7 @@ struct Replay {
                 if (!(input >> frameId)) return false;
                 accepted = engine.heartbeat(owner, generation, frameId, now);
             } else if (command == "stop") {
-                accepted = engine.stop(owner);
+                accepted = engine.stop(owner, now);
             } else {
                 return false;
             }
@@ -111,7 +114,7 @@ struct Replay {
 #ifdef __EMSCRIPTEN__
 namespace {
 Replay replay;
-decltype(ori::Frame::pixels) pixels;
+std::array<std::uint8_t, ori::imageSize> pixels;
 std::string reply;
 }
 
@@ -122,7 +125,10 @@ EMSCRIPTEN_KEEPALIVE std::uint8_t* ori_pixels() {
 
 EMSCRIPTEN_KEEPALIVE const char* ori_command(const char* line) {
     std::ostringstream output;
-    if (!replay.run(line, [](ori::Frame& frame) { frame.pixels = pixels; return true; }, output)) {
+    if (!replay.run(line, [](ori::Frame& frame) {
+            frame.pixels.assign(pixels.begin(), pixels.end());
+            return true;
+        }, output)) {
         return nullptr;
     }
     reply = output.str();
@@ -134,7 +140,8 @@ int main() {
     Replay replay;
     const auto readFrame = [](ori::Frame& frame) {
         return static_cast<bool>(std::cin.read(
-            reinterpret_cast<char*>(frame.pixels.data()), frame.pixels.size()));
+            reinterpret_cast<char*>(frame.pixels.data()),
+            static_cast<std::streamsize>(frame.pixels.size())));
     };
     std::string line;
     while (std::getline(std::cin, line)) {

@@ -2,12 +2,22 @@
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from replay import Scenario
 from client import ReplayClient
-from fixtures import HEIGHT, WIDTH
+from fixtures import HEIGHT, WIDTH, scene
+
+
+def find_ffmpeg():
+    for candidate in (os.environ.get("FFMPEG"), shutil.which("ffmpeg")):
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def overlap(box, label):
@@ -37,8 +47,11 @@ def labels_from(path):
 
 
 def evaluate(clip, labels, frame_size):
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg executable not found")
     decoder = subprocess.Popen([
-        "ffmpeg", "-nostdin", "-v", "error", "-i", str(clip), "-vf",
+        ffmpeg, "-nostdin", "-v", "error", "-i", str(clip), "-vf",
         "fps=10,scale=320:180,format=gray", "-an", "-f", "rawvideo", "pipe:1",
     ], stdout=subprocess.PIPE)
     visible = 0
@@ -74,11 +87,54 @@ def evaluate(clip, labels, frame_size):
     return missed, visible
 
 
+def self_test():
+    assert overlap(None, [10, 10, 20, 20]) == 0.0
+    assert overlap([10, 10, 20, 20], [10, 10, 20, 20]) == 1.0
+    assert abs(overlap([10, 10, 20, 20], [20, 10, 20, 20]) - (1 / 3)) < 1e-9
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for bad in ("[]", "[null]", "[[1,2,3]]", "[[0,10,20,20]]", "[[10,10,311,20]]"):
+            path = root / "bad.json"
+            path.write_text(bad)
+            try:
+                labels_from(path)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"Expected validation error for {bad}")
+
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            print("Evaluator unit self-test passed (FFmpeg not installed; skipped clip decode)")
+            return 0
+
+        labels = [[120 - i * 2, 65, 72 + (i % 3) * 2, 72 + (i % 3) * 2] for i in range(25)]
+        raw_bytes = b"".join(bytes(scene(tuple(box))) for box in labels)
+        clip = root / "synthetic.mp4"
+        labels_path = root / "synthetic.json"
+        labels_path.write_text(json.dumps(labels))
+        subprocess.run([
+            ffmpeg, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gray",
+            "-s", f"{WIDTH}x{HEIGHT}", "-r", "10", "-i", "pipe:0",
+            "-c:v", "mpeg4", "-q:v", "2", str(clip),
+        ], input=raw_bytes, check=True)
+        missed, visible = evaluate(clip, labels_from(labels_path), WIDTH * HEIGHT)
+        assert visible == len(labels) and not missed, (missed, visible)
+        print(f"Evaluator self-test passed ({visible}/{visible} synthetic MP4 frames >= 0.5 IoU)")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("clip", type=Path)
-    parser.add_argument("labels", type=Path)
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("clip", nargs="?", type=Path)
+    parser.add_argument("labels", nargs="?", type=Path)
     args = parser.parse_args()
+    if args.self_test:
+        return self_test()
+    if args.clip is None or args.labels is None:
+        parser.error("Provide <clip> and <labels> or pass --self-test")
     labels = labels_from(args.labels)
     missed, visible = evaluate(args.clip, labels, WIDTH * HEIGHT)
     successes = visible - len(missed)

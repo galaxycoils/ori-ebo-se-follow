@@ -1,20 +1,25 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <optional>
 #include <set>
 #include <string_view>
+#include <vector>
 
 namespace ori {
 
 using Milliseconds = std::int64_t;
 constexpr int imageWidth = 320;
 constexpr int imageHeight = 180;
+constexpr std::size_t imageSize = static_cast<std::size_t>(imageWidth) * imageHeight;
 constexpr Milliseconds frameLifetime = 250;
 constexpr Milliseconds sessionLifetime = 750;
 constexpr Milliseconds selectionLifetime = 2000;
+constexpr Milliseconds factoryCommandLimit = 300;
+constexpr Milliseconds decisionLatencyBudget = 100;
 constexpr Milliseconds dockAcknowledgement = 3000;
 constexpr Milliseconds dockReturnLimit = 60000;
 constexpr Milliseconds dockTelemetryLimit = 1500;
@@ -28,9 +33,9 @@ struct Box {
 };
 
 struct Frame {
-    std::uint64_t id;
-    Milliseconds captured;
-    std::array<std::uint8_t, imageWidth * imageHeight> pixels;
+    std::uint64_t id = 0;
+    Milliseconds captured = 0;
+    std::vector<std::uint8_t> pixels = std::vector<std::uint8_t>(imageSize);
 };
 
 enum class Motion { Hold, Left, Right, Forward };
@@ -76,13 +81,18 @@ public:
     Box box() const { return box_; }
 
 private:
-    using Patch = std::array<double, 144>;
+    static constexpr int patchSide = 12;
+    using Patch = std::array<double, patchSide * patchSide>;
+    struct Candidate { Box box; double score; };
     static std::optional<Patch> readPatch(const Frame& frame, Box box);
-    static double similarity(const Patch& left, const Patch& right);
+    std::optional<double> scoreBox(const Frame& frame, Box box,
+                                   const std::array<int, patchSide>& rowOffsets,
+                                   const std::array<int, patchSide>& colOffsets) const;
 
     Box box_{};
     Patch original_{};
     Patch recent_{};
+    std::vector<Candidate> candidates_;
 };
 
 // Clock and inputs are injected. This class has no access to hardware.
@@ -97,7 +107,7 @@ public:
     bool trackOnly(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
     bool heartbeat(std::uint64_t driver, std::uint64_t generation, std::uint64_t displayed,
                    Milliseconds now);
-    bool stop(std::uint64_t driver);
+    bool stop(std::uint64_t driver, Milliseconds now = -1);
     void setInhibit(Inhibit cause, bool active);
 
     bool requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
@@ -110,6 +120,9 @@ public:
     State state() const { return state_; }
     std::uint64_t generation() const { return generation_; }
     std::uint64_t owner() const { return owner_; }
+    std::uint64_t displayedFrame() const { return displayed_; }
+    std::optional<Milliseconds> frameCaptured(std::uint64_t frameId) const;
+    const std::set<Inhibit>& inhibits() const { return inhibits_; }
     std::optional<Box> box() const;
     bool canTeach() const { return calibration().has_value(); }
     const Decision& decision() const { return decision_; }
@@ -123,14 +136,16 @@ private:
 
     std::set<Inhibit> inhibits_;
     bool dockInProgress() const;
-    void cancelDock(bool failure);
+    void cancelDock(bool failure, Milliseconds now);
     DockState dockState_ = DockState::Idle;
     DockSignal dockSignal_ = DockSignal::Unknown;
     DockAction dockAction_ = DockAction::None;
     std::uint64_t dockOwner_ = 0;
     Milliseconds dockSample_ = -1;
     Milliseconds dockStarted_ = 0;
+    Milliseconds dockStoppedAt_ = 0;
     Milliseconds chargeSince_ = -1;
+    Milliseconds lastNow_ = 0;
     bool dockFailure_ = false;
 
     State state_ = State::Off;

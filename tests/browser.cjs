@@ -8,11 +8,15 @@ const { once } = require("node:events");
 const { createInterface } = require("node:readline");
 const path = require("node:path");
 
-async function testDemo(base) {
-  const browser = await chromium.launch({
+function launchBrowser() {
+  return chromium.launch({
     executablePath: process.env.CHROMIUM || (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined),
     headless: true,
   });
+}
+
+async function testDemo(base) {
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = [];
@@ -42,21 +46,40 @@ async function testDemo(base) {
       x: canvas.clientWidth * 0.5, y: canvas.clientHeight * 105 / 180,
     }));
     const bounds = await preview.boundingBox();
-    async function drawBox() {
-      await page.mouse.move(bounds.x + bounds.width * 120 / 320, bounds.y + bounds.height * 65 / 180);
+    async function drawBox(x0 = 120, y0 = 65, x1 = 200, y1 = 145) {
+      await page.mouse.move(bounds.x + bounds.width * x0 / 320, bounds.y + bounds.height * y0 / 180);
       await page.mouse.down();
-      await page.mouse.move(bounds.x + bounds.width * 200 / 320, bounds.y + bounds.height * 145 / 180, { steps: 4 });
+      await page.mouse.move(bounds.x + bounds.width * x1 / 320, bounds.y + bounds.height * y1 / 180, { steps: 4 });
       await page.mouse.up();
     }
+
+    // Keyboard Escape must cancel an active unconfirmed selection.
+    await drawBox();
+    await page.waitForFunction(() => selection !== null);
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => selection === null);
+    assert(await page.getByRole("button", { name: "Confirm selection" }).isHidden());
+
+    // Selection expiry returns preview cleanly to live video.
     await drawBox();
     await page.waitForFunction(() => selection === null && hint.includes("expired"));
     assert(await page.getByRole("button", { name: "Confirm selection" }).isHidden());
     await page.waitForFunction(() => previewIsLive());
+
+    // Bottom-right border drag clamps cleanly within valid Box::visible() bounds.
+    await drawBox(240, 100, 320, 180);
+    const clamped = await page.evaluate(() => selection.box);
+    assert(clamped[0] + clamped[2] <= 319 && clamped[1] + clamped[3] <= 179, clamped);
+    await page.keyboard.press("Escape");
+
+    // Manual drag box -> confirm -> Stop immediately clears displayed.box.
     await drawBox();
     await page.getByRole("button", { name: "Confirm selection" }).click();
-    await page.waitForFunction(() => status.state === "TRACKING");
+    await page.waitForFunction(() => status.state === "TRACKING" && Array.isArray(displayed.box));
     await page.getByRole("button", { name: "Stop", exact: true }).click();
-    await page.waitForFunction(() => status.state === "OFF" && !pending);
+    await page.waitForFunction(() => status.state === "OFF" && displayed.box === null && !pending);
+
+    // Tap target -> teach -> follow -> track-only -> move demo target.
     await preview.click({ position });
     await page.waitForFunction(() => status.state === "TRACKING");
     const selectedFrame = await page.evaluate(() => status.frame);
@@ -112,6 +135,44 @@ async function testDemo(base) {
   }
 }
 
+async function testOwnerAuth() {
+  const server = spawn(process.env.PYTHON || "python3", ["demo/server.py", "--port", "0", "--require-auth"], {
+    cwd: path.resolve(__dirname, ".."),
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  const exited = once(server, "exit");
+  const lines = createInterface({ input: server.stdout });
+  const iterator = lines[Symbol.asyncIterator]();
+  const browser = await launchBrowser();
+  try {
+    const first = await Promise.race([
+      iterator.next(),
+      exited.then(([code]) => { throw new Error("Auth server exited before startup: " + code); }),
+    ]);
+    const second = await iterator.next();
+    const base = first.value.match(/^Ori replay demo at (http:\/\/127\.0\.0\.1:\d+)$/)?.[1];
+    const pairUrl = second.value.match(/^Owner pairing URL: (http:\/\/127\.0\.0\.1:\d+\/\?token=.+)$/)?.[1];
+    assert(base && pairUrl, "Expected pairing URL on startup");
+
+    const context = await browser.newContext();
+    const unauth = await context.request.get(base + "/");
+    assert.equal(unauth.status(), 401);
+    const unauthFrame = await context.request.get(base + "/api/frame");
+    assert.equal(unauthFrame.status(), 401);
+
+    const page = await context.newPage();
+    await page.goto(pairUrl);
+    await page.waitForFunction(() => displayed.frame > 0 && status.boot);
+    assert.equal(page.url(), base + "/");
+    console.log("Owner-token pairing authentication check passed");
+  } finally {
+    await browser.close();
+    lines.close();
+    server.kill("SIGINT");
+    await exited;
+  }
+}
+
 async function main() {
   if (process.env.ORI_DEMO_URL) return testDemo(process.env.ORI_DEMO_URL);
   const pages = process.env.ORI_TEST_PAGES === "1";
@@ -138,6 +199,9 @@ async function main() {
     lines.close();
     server.kill("SIGINT");
     await exited;
+  }
+  if (!pages) {
+    await testOwnerAuth();
   }
 }
 

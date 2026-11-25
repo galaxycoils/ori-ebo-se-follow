@@ -323,6 +323,44 @@ def test_home_stale(s):
     assert dock_signal(s, "idle")["can_home"]
 
 
+def test_home_failed_clears_on_select_and_stop(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    dock_signal(s, "failed")
+    assert dock_signal(s, "idle")["dock"] == "failed"
+    s.frame(REFERENCE)
+    selected = s.control("select", s.seq, *REFERENCE)
+    assert selected["accepted"] and selected["dock"] == "idle"
+    assert s.control("stop")["dock"] == "idle"
+
+    s.control("home")
+    dock_signal(s, "failed")
+    assert dock_signal(s, "idle")["dock"] == "failed"
+    assert s.control("stop")["dock"] == "idle"
+
+
+def test_home_stopping_timeout(s):
+    dock_signal(s, "idle")
+    s.control("home")
+    dock_signal(s, "returning")
+    assert s.control("stop")["dock"] == "stopping"
+    for _ in range(2):
+        assert dock_signal(s, "returning", 1000)["dock"] == "stopping"
+    s.now += 1000
+    status = s.run("tick")
+    assert status["dock"] == "failed" and status["dock_owner"] == 0
+    idle = dock_signal(s, "idle")
+    assert idle["dock"] == "failed" and idle["can_home"]
+    assert s.control("stop")["dock"] == "idle"
+
+
+def test_invalid_zero_driver_stop(s):
+    s.ready()
+    generation = s.status["generation"]
+    res = s.control("stop", owner=0)
+    assert not res["accepted"] and res["generation"] == generation
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", choices=["retreat"])
@@ -339,6 +377,8 @@ def main():
         test_home, test_home_cancel, test_home_no_ack, test_home_late_ack,
         test_home_contact_failure, test_home_timeout,
         test_stock_low_battery_return, test_home_stale,
+        test_home_failed_clears_on_select_and_stop, test_home_stopping_timeout,
+        test_invalid_zero_driver_stop,
         retreat, lambda s: retreat(s, track_only=True),
         test_camera, test_disconnect, test_frozen_preview, test_ownership,
         test_stale_calibration, test_frozen_selection,

@@ -2,7 +2,10 @@ name: Ori simulator
 
 on:
   push:
-    branches: [ori-firmware-prototype]
+    branches: [main, ori-firmware-prototype]
+  pull_request:
+    branches: [main, ori-firmware-prototype]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,8 +19,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Test native replay
-        run: make test
+      - name: Install FFmpeg and test native core, sanitizers, soak benchmark, and replay
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          make test test-asan bench
       - name: Install Emscripten and build the simulator
         run: |
           git clone --quiet --depth 1 --branch 4.0.23 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
@@ -34,10 +39,12 @@ jobs:
           make test-browser
           ORI_TEST_PAGES=1 node tests/browser.cjs
       - uses: actions/upload-pages-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
           path: build/pages
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       id-token: write

@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ori · Follow demo</title>
+<meta name="theme-color" content="#edf0e9">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<title>Ori Companion</title>
 <style>
 :root {
   color-scheme: light;
@@ -30,7 +33,28 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
 #stop { color: #fff; background: #962d35; border-color: #962d35; }
 #status { margin: 0 0 12px; font-weight: 650; }
 #help { margin: 12px 0 0; color: #405148; }
-#motion { display: block; margin-top: 10px; font: .85rem ui-monospace, monospace; }
+#motion, #telemetry { display: block; margin-top: 8px; font: .85rem ui-monospace, monospace; color: #405148; }
+.autonomy { margin-top: 10px; font-size: .85rem; color: #405148; }
+.autonomy summary { cursor: pointer; font-weight: 600; }
+.drawer { border-top: 1px solid #e6ede6; padding-top: 10px; }
+.drawer p { margin: 8px 0; }
+.drawer video { width: 100%; margin: 10px 0; background: #222; }
+.drawer .actions { margin-top: 8px; }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  button { transition: background-color .12s, border-color .12s; }
+  button:hover:enabled { border-color: #15583b; }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  main { margin-top: 8px; }
+  .card { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+}
+.toggles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.toggles label { display: flex; align-items: center; gap: 6px; }
+.manual { margin-top: 12px; padding-top: 10px; border-top: 1px solid #e6ede6; }
+.manual-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: .85rem; }
+.dpad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; max-width: 260px; }
+.dpad button { min-height: 40px; font-weight: 600; touch-action: none; }
+#motors.armed { background: #15583b; border-color: #15583b; color: #fff; }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -41,33 +65,114 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
     <canvas id="preview" width="320" height="180" tabindex="0" aria-label="Demo live preview. Tap, drag, or press Enter to select the target."></canvas>
     <div class="controls">
       <p id="status" role="status">Waiting for the preview</p>
-      <div class="actions">
+      <div id="control-actions" class="actions">
         <button id="confirm" hidden>Confirm selection</button>
         <button id="cancel" hidden>Cancel selection</button>
         <button id="track">Track only</button>
         <button id="teach">Set gap here</button>
         <button id="follow">Follow</button>
+        <button id="resume" hidden>Resume target</button>
+        <button id="spot" hidden>Lock spotted</button>
+        <button id="forget" hidden>Forget target</button>
         <button id="home">Return home</button>
+        <button id="undock" hidden>Undock</button>
+        <button id="motors" hidden>Motors: Locked</button>
         <button id="lift" hidden>Lift off base (demo)</button>
         <button id="move">Move demo target</button>
       </div>
+      <div id="drive-pad" class="manual">
+        <div class="manual-bar">
+          <strong>Manual Drive (WASD / Arrows)</strong>
+          <label>Speed <select id="speed"><option value="0.20">Slow</option><option value="0.30" selected>Normal</option><option value="0.48">Fast</option></select></label>
+          <label><input id="invert-turn" type="checkbox"> Invert turn</label>
+        </div>
+        <div class="dpad">
+          <span></span><button type="button" data-ly="1" data-rx="0" aria-label="Drive forward">Fwd</button><span></span>
+          <button type="button" data-ly="0" data-rx="-1" aria-label="Turn left">Left</button><button id="brake" type="button">Brake</button><button type="button" data-ly="0" data-rx="1" aria-label="Turn right">Right</button>
+          <span></span><button type="button" data-ly="-1" data-rx="0" aria-label="Drive back">Back</button><span></span>
+        </div>
+      </div>
       <p id="help">Tap the target to track it, or drag a box for a custom selection.</p>
+      <output id="telemetry">Mode: Simulator · Memory: none</output>
       <output id="motion">Simulated motion · HOLD</output>
+      <details id="room-tools" class="autonomy drawer">
+        <summary>Dock route</summary>
+        <p id="route-text" aria-live="polite">Start teaching while Ori is charging.</p>
+        <div class="actions">
+          <button id="teach-room" disabled>Teach dock</button>
+          <button id="mark-room" hidden>Capture landmark</button>
+          <button id="save-room" hidden>Save route</button>
+          <button id="guide-room" hidden>Guide me home</button>
+          <button id="forget-room" hidden>Forget route</button>
+          <button id="dock-approach" hidden>Dock from here</button>
+        </div>
+      </details>
+      <details class="autonomy drawer">
+        <summary>Camera clips</summary>
+        <div class="actions">
+          <button id="snapshot" disabled>Save snapshot</button>
+          <button id="record" disabled>Record clip</button>
+        </div>
+        <p id="media-text" aria-live="polite"></p>
+        <video id="playback" controls playsinline hidden></video>
+        <a id="download-clip" hidden>Download clip</a>
+        <label><input id="motion-alert" type="checkbox"> Motion alerts on this screen</label>
+        <p id="motion-alert-status" role="status"></p>
+      </details>
+      <details id="sharing" class="autonomy drawer" hidden>
+        <summary>Family viewing</summary>
+        <div class="actions">
+          <button id="create-share">Create viewing link</button>
+          <button id="revoke-share">Revoke viewing link</button>
+        </div>
+        <p id="share-text" role="status">One viewing link at a time.</p>
+        <input id="share-link" aria-label="Family viewing link" readonly hidden>
+      </details>
+      <details id="autonomy" class="autonomy">
+        <summary>Autonomy</summary>
+        <div class="toggles">
+          <label><input type="checkbox" data-policy="auto_reacquire"> Auto-remember</label>
+          <label><input type="checkbox" data-policy="auto_gap"> Auto-gap</label>
+          <label><input type="checkbox" data-policy="auto_spot"> Auto-spot</label>
+          <label><input type="checkbox" data-policy="base_watch"> Base watch</label>
+          <label><input type="checkbox" data-policy="auto_dock_low_battery"> Low-battery dock</label>
+          <label><input type="checkbox" data-policy="auto_dock_idle"> Idle dock (90s)</label>
+          <label><input type="checkbox" data-policy="auto_dock_disconnect"> Disconnect dock</label>
+        </div>
+      </details>
     </div>
   </section>
 </main>
+<script src="./companion.js"></script>
 <script>
 "use strict";
 
 const canvas = document.querySelector("#preview");
 const ctx = canvas.getContext("2d");
+let updateCompanion = () => {};
+const uiTimings = {frameAgeMs: null, decodeMs: null, feedbackMs: null, acknowledgementMs: null};
 const buttons = Object.fromEntries(
   [...document.querySelectorAll("button")].map(button => [button.id, button])
 );
 const statusText = document.querySelector("#status");
 const help = document.querySelector("#help");
+const telemetry = document.querySelector("#telemetry");
 const motion = document.querySelector("#motion");
-const driver = crypto.getRandomValues(new Uint32Array(1))[0] || 1;
+const speedSelect = document.querySelector("#speed");
+const invertTurnBox = document.querySelector("#invert-turn");
+const dpadButtons = [...document.querySelectorAll("#drive-pad button[data-ly]")];
+const policyBoxes = [...document.querySelectorAll("input[data-policy]")];
+const driver = (() => {
+  try {
+    const saved = Number(sessionStorage.getItem("ori_driver"));
+    if (Number.isSafeInteger(saved) && saved > 0) return saved;
+    const next = crypto.getRandomValues(new Uint32Array(1))[0] || 1;
+    sessionStorage.setItem("ori_driver", String(next));
+    return next;
+  } catch {
+    return crypto.getRandomValues(new Uint32Array(1))[0] || 1;
+  }
+})();
 let status = { state: "OFF", owner: 0, generation: 1, motion: "HOLD", revision: 0 };
 const retiredBoots = new Set();
 let displayed = { frame: 0, imageFrame: 0, image: null, box: null };
@@ -81,7 +186,8 @@ let fatal = "";
 let hint = "";
 let lastNewImage = -Infinity;
 let intent = 0;
-const previewIsLive = () => !fatal && !document.hidden && performance.now() - lastNewImage < 750;
+const previewIsLive = () => !fatal && !document.hidden &&
+  performance.now() - lastNewImage < (status.live_hardware ? 2500 : 750);
 
 const labels = {
   OFF: "Tracking off",
@@ -105,7 +211,14 @@ function paint() {
   if (region) {
     ctx.strokeStyle = selection ? "#ffce6e" : "#82ecab";
     ctx.lineWidth = 2;
+    ctx.setLineDash([]);
     ctx.strokeRect(...region);
+  } else if (status.state === "OFF" && status.spotted_box) {
+    ctx.strokeStyle = "#6ee7ff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(...status.spotted_box);
+    ctx.setLineDash([]);
   }
 }
 
@@ -114,7 +227,7 @@ function setText(element, value) {
 }
 
 function update() {
-  const owner = status.owner === driver;
+  const owner = status.owner === driver || Boolean(status.autonomous && status.owner);
   const dockLabels = {
     requested: "Requesting return to base",
     returning: "Returning to base",
@@ -124,46 +237,79 @@ function update() {
     failed: "Charging was not confirmed",
     unknown: "Checking base status",
   };
-  const busy = (status.owner && !owner) || (status.dock_owner && status.dock_owner !== driver);
+  const busy = ((status.owner && !owner) || (status.dock_owner && status.dock_owner !== driver)) && !status.autonomous;
+  const viewing = status.role === "viewer";
   const live = previewIsLive();
   const previewMessage = displayed.image ? "Waiting for live video" : "Connecting to preview";
-  const showDock = Boolean(dockLabels[status.dock]) && (status.dock !== "failed" || status.state === "OFF");
-  const stateLabel = busy ? "Controlled by another tab" : showDock ? dockLabels[status.dock] : labels[status.state];
-  const feedback = pending === "stop" ? "Stopping…" : pending === "select" ? "Selecting target…" : "";
+  const showDock = Boolean(dockLabels[status.dock]) &&
+    !((status.dock === "failed" || status.dock === "charging") && status.state !== "OFF");
+  const stateLabel = viewing ? "Live view" : busy ? "Controlled by another tab"
+    : showDock ? dockLabels[status.dock] : labels[status.state];
+  const feedback = ({stop: "Stopping…", select: "Selecting target…", follow: "Starting Follow…",
+    home: "Requesting return…", track: "Pausing drive…"})[pending] ?? "";
   setText(statusText, fatal || feedback || (selection ? "Adjust selection" : !live ? previewMessage : hint || stateLabel));
-  setText(motion, "Simulated motion · " + (live ? status.motion : "unknown"));
+  const modeLabel = status.live_hardware ? (status.follow_enabled ? "Live Ori · Follow armed" : "Live Ori · Motor lock") : "Simulator";
+  const batLabel = status.battery_percent >= 0 ? ` · ${status.battery_percent}%${status.battery_charging ? " chg" : ""}` : "";
+  const memLabel = status.memory && status.memory !== "none" ? ` · Mem: ${status.memory}${status.confidence ? " " + status.confidence + "%" : ""}` : "";
+  const dockReason = status.auto_dock_reason && status.auto_dock_reason !== "none" ? ` · ${status.auto_dock_reason}` : "";
+  setText(telemetry, `${modeLabel}${batLabel}${memLabel}${dockReason}`);
+  setText(motion, (status.live_hardware ? "Motion · " : "Simulated motion · ") + (live ? status.motion : "unknown"));
   setText(help, selection ? "Drag around the whole target, then confirm."
     : reasons[status.reason] || ({
-      OFF: "Tap the target to track it, or drag a box for a custom selection.",
-      LOST: "Tap the target in the live picture to select it again.",
+      OFF: status.spotted_box ? "Motion spotted. Tap Lock spotted or draw a box." : "Tap the target to track it, or drag a box for a custom selection.",
+      LOST: status.memory === "searching" ? "Searching frame for remembered target…" : "Tap the target in the live picture to select it again.",
       TRACKING: status.can_teach ? "Set the gap at the distance you want to keep." : "Hold the target steady to set the gap.",
-      READY: "Gap saved. Press Follow when you want Ori to move.",
+      READY: status.live_hardware && !status.follow_enabled ? "Target locked & gap saved (motors locked; tap Motors: Locked to arm)."
+        : status.live_hardware && status.dock === "charging" ? "Target locked. Tap Undock (or drive Forward) to leave base and press Follow."
+        : "Gap saved. Press Follow when you want Ori to move.",
       FOLLOWING: "Track only pauses driving and keeps the target selected.",
     })[status.state]);
   buttons.confirm.hidden = buttons.cancel.hidden = !selection;
   buttons.track.hidden = !owner || Boolean(selection) || (status.state !== "FOLLOWING" && pending !== "follow");
   buttons.teach.hidden = !owner || Boolean(selection) || status.state === "FOLLOWING";
-  buttons.follow.hidden = !owner || Boolean(selection) || status.state !== "READY";
-  buttons.move.hidden = !owner || Boolean(selection) || status.state === "FOLLOWING";
+  buttons.follow.hidden = !owner || Boolean(selection) || status.state !== "READY" || (status.dock === "charging");
+  buttons.resume.hidden = Boolean(selection) || status.memory !== "saved";
+  buttons.spot.hidden = Boolean(selection) || status.state !== "OFF" || !status.spotted_box;
+  buttons.forget.hidden = Boolean(selection) || !status.memory || status.memory === "none";
+  buttons.undock.hidden = !status.live_hardware || status.dock !== "charging" || Boolean(selection);
+  buttons.motors.hidden = !status.live_hardware || Boolean(selection);
+  buttons.motors.textContent = status.follow_enabled ? "Motors: Armed" : "Motors: Locked";
+  buttons.motors.classList.toggle("armed", Boolean(status.follow_enabled));
+  buttons.move.hidden = status.live_hardware || !owner || Boolean(selection) || status.state === "FOLLOWING";
   buttons.teach.disabled = !live || !status.can_teach || Boolean(pending);
   buttons.follow.disabled = buttons.move.disabled = !live || Boolean(pending);
-  buttons.home.hidden = !status.can_home || Boolean(selection);
+  buttons.undock.disabled = buttons.motors.disabled = !live || Boolean(pending);
+  buttons.resume.disabled = buttons.spot.disabled = buttons.forget.disabled = !live || Boolean(pending);
+  buttons.home.hidden = !status.can_home || Boolean(selection) || Boolean(status.retracing);
   buttons.home.disabled = Boolean(busy || pending) || !live;
-  buttons.lift.hidden = status.dock !== "charging";
+  buttons.lift.hidden = status.live_hardware || status.dock !== "charging";
   buttons.lift.disabled = Boolean(pending) || !live;
+  for (const box of policyBoxes) {
+    box.checked = Boolean(status.policy?.[box.dataset.policy]);
+    box.disabled = Boolean(busy);
+  }
   if (showDock) {
     const dockHelp = {
       requested: "Waiting for the factory controller.",
       returning: "The factory controller has the wheels.",
       "checking-charge": "Waiting for sustained charging feedback.",
-      charging: "Lift Ori off the simulated base to start another session.",
+      charging: status.live_hardware
+        ? "On charging dock. Tap or drag any target in view to track it on camera."
+        : "Lift Ori off the simulated base to start another session.",
       stopping: "Waiting for the controller to report idle.",
       failed: "Clear the approach and place Ori within 2 m in front of the base before retrying.",
       unknown: "Waiting for fresh factory feedback.",
     };
     setText(help, dockHelp[status.dock]);
   }
-  buttons.stop.disabled = Boolean(busy);
+  buttons.stop.disabled = Boolean(busy) || viewing;
+  for (const id of ["control-actions", "room-tools", "autonomy"]) {
+    document.getElementById(id).hidden = viewing;
+  }
+  document.querySelector("#drive-pad").hidden = viewing;
+  document.querySelector("#sharing").hidden = !status.canShare;
+  if (viewing) setText(help, "");
+  updateCompanion();
 
 }
 
@@ -184,11 +330,13 @@ function apply(next) {
     startPoint = null;
   }
   const previousBox = displayed.box;
+  const previousGeneration = status.generation;
   status = next;
   if (!selection && displayed.boot === next.boot) {
-    displayed.box = next.box ?? null;
+    if (next.frame === displayed.imageFrame) displayed.box = next.box ?? null;
+    else if (next.generation !== previousGeneration) displayed.box = null;
   }
-  if (previousBox !== displayed.box) paint();
+  if (String(previousBox) !== String(displayed.box)) paint();
   update();
 }
 
@@ -197,14 +345,16 @@ const transport = document.documentElement.dataset.preview === "pages"
   : Promise.resolve({
     async frame(previous) {
       const response = await fetch("/api/frame", {
-        cache: "no-store", headers: {"If-None-Match": previous}, signal: AbortSignal.timeout(1200),
+        cache: "no-store", headers: {"If-None-Match": previous}, signal: AbortSignal.timeout(2500),
       });
       if (response.status === 204) return null;
       if (!response.ok) throw new Error("Preview unavailable");
       return {
         tag: response.headers.get("ETag") || "",
         frame: Number(response.headers.get("X-Frame-Id")),
-        status: JSON.parse(response.headers.get("X-Ori-Status")),
+        age: Number(response.headers.get("X-Ori-Frame-Age-Ms")),
+        status: {...JSON.parse(response.headers.get("X-Ori-Status")),
+          role: response.headers.get("X-Ori-Role"), canShare: response.headers.get("X-Ori-Can-Share") === "1"},
         image: async () => createImageBitmap(await response.blob()),
         discard: () => response.body.cancel(),
       };
@@ -225,7 +375,7 @@ async function post(action, fields = {}, session = status) {
   const result = await (await transport).control(action, {
     driver, boot: session.boot, generation: session.generation, ...fields,
   });
-  apply(result);
+  apply({...result, role: status.role, canShare: status.canShare});
   return result.accepted;
 }
 
@@ -255,7 +405,9 @@ async function refresh() {
         apply(next);
         return;
       }
+      const decodeStarted = performance.now();
       const image = await preview.image();
+      uiTimings.decodeMs = performance.now() - decodeStarted;
       if (!selection && !document.hidden && !retiredBoots.has(next.boot)) {
         // Acknowledge after a rendering opportunity, using the painted frame ID.
         const previous = displayed.image;
@@ -270,6 +422,7 @@ async function refresh() {
             if (presented?.image !== image) presented?.image.close();
             displayed.frame = frame;
             presented = {...displayed};
+            uiTimings.frameAgeMs = (preview.age ?? 0) + performance.now() - decodeStarted;
           }
         }));
         if (previous !== presented?.image) previous?.close();
@@ -306,9 +459,10 @@ function clampBox(x, y, width, height) {
 }
 
 function canBeginSelection() {
-  return !pending && (Boolean(selection) || previewIsLive()) &&
-    presented && presented.boot === status.boot && !(status.owner && status.owner !== driver) &&
-    status.state !== "FOLLOWING" && !(status.dock !== "idle" && !status.can_home);
+  const baseWatchOk = Boolean(status.policy?.base_watch && status.dock === "charging");
+  return status.role !== "viewer" && !pending && (Boolean(selection) || previewIsLive()) &&
+    presented && presented.boot === status.boot && !(status.owner && status.owner !== driver && !status.autonomous) &&
+    status.state !== "FOLLOWING" && (status.dock === "idle" || status.can_home || baseWatchOk);
 }
 
 canvas.addEventListener("pointerdown", event => {
@@ -320,11 +474,12 @@ canvas.addEventListener("pointerdown", event => {
   }
   dragging = Boolean(selection);
   startPoint = point(event);
+  const tapSize = status.live_hardware ? 56 : 80;
   selection = {
     frame: displayed.imageFrame,
     session: status,
     deadline: selection?.deadline ?? performance.now() + 2000,
-    box: clampBox(startPoint[0] - 40, startPoint[1] - 40, 80, 80),
+    box: clampBox(startPoint[0] - tapSize / 2, startPoint[1] - tapSize / 2, tapSize, tapSize),
   };
   hint = "";
   canvas.setPointerCapture(event.pointerId);
@@ -382,17 +537,22 @@ document.addEventListener("keydown", event => {
 });
 
 async function command(action, fields = {}, session = status) {
+  if (status.role === "viewer") return;
   if (pending && action !== "stop" && action !== "track") return;
   const currentIntent = ++intent;
+  const started = performance.now();
   pending = action;
   update();
+  requestAnimationFrame(() => { uiTimings.feedbackMs = performance.now() - started; });
   hint = "";
   try {
     if (action === "follow" && displayed.frame) {
       if (!await post("heartbeat", {frame: displayed.frame}, session)) throw new Error("Preview expired");
     }
     if (intent !== currentIntent) return;
-    if (!await post(action, fields, session)) {
+    const accepted = await post(action, fields, session);
+    uiTimings.acknowledgementMs = performance.now() - started;
+    if (!accepted) {
       if (intent !== currentIntent) return;
       hint = action === "teach" ? "Hold the target steady and try again."
         : action === "select" ? "Select a fresh frame and try again."
@@ -415,22 +575,140 @@ function confirmSelection() {
 }
 buttons.confirm.onclick = confirmSelection;
 buttons.cancel.onclick = () => { selection = null; update(); paint(); };
-buttons.stop.onclick = () => { selection = null; command("stop"); };
-for (const action of ["track", "teach", "follow", "move", "home", "lift"]) {
+buttons.stop.onclick = () => { stopManual(); selection = null; command("stop"); };
+for (const action of ["track", "teach", "follow", "move", "home", "lift", "resume", "spot", "forget"]) {
   buttons[action].onclick = () => command(action);
+}
+function syncMotorSettings(enabled = Boolean(status.follow_enabled)) {
+  const s = Number(speedSelect.value);
+  command("motors", {enabled, forward_speed: s, turn_speed: s * 0.75, invert_turn: invertTurnBox.checked});
+}
+for (const [id, mode] of [["create-share", "create"], ["revoke-share", "revoke"]]) {
+  document.getElementById(id).onclick = async () => {
+    const text = document.querySelector("#share-text");
+    const link = document.querySelector("#share-link");
+    try {
+      const response = await fetch("./api/share-view", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode})});
+      if (!response.ok) throw new Error("Could not update viewing access.");
+      const {url} = await response.json();
+      link.value = url ? new URL(url, location.href).href : "";
+      link.hidden = !url;
+      if (url) link.select();
+      text.textContent = url ? "Share this view-only link." : "Viewing link revoked.";
+    } catch (error) {
+      text.textContent = error.message;
+    }
+  };
+}
+buttons.motors.onclick = () => syncMotorSettings(!status.follow_enabled);
+speedSelect.onchange = () => { if (status.live_hardware) syncMotorSettings(); };
+invertTurnBox.onchange = () => { if (status.live_hardware) syncMotorSettings(); };
+
+let manualTimer = null;
+let manualAxes = {ly: 0, rx: 0};
+const keysDown = new Set();
+
+function sendManual(ly, rx, ttl = 280) {
+  if (status.role === "viewer") return;
+  post("manual", {ly, rx, ttl}).catch(() => {});
+}
+function startManual(ly, rx) {
+  manualAxes = {ly, rx};
+  clearInterval(manualTimer);
+  if (!ly && !rx) {
+    sendManual(0, 0);
+    return;
+  }
+  sendManual(ly, rx);
+  manualTimer = setInterval(() => sendManual(manualAxes.ly, manualAxes.rx), 120);
+}
+function stopManual() {
+  keysDown.clear();
+  clearInterval(manualTimer);
+  manualTimer = null;
+  if (manualAxes.ly || manualAxes.rx) {
+    manualAxes = {ly: 0, rx: 0};
+    sendManual(0, 0);
+  }
+}
+for (const btn of dpadButtons) {
+  const go = event => {
+    event.preventDefault();
+    const s = Number(speedSelect.value);
+    btn.setPointerCapture?.(event.pointerId);
+    startManual(Number(btn.dataset.ly) * s, Number(btn.dataset.rx) * s * 0.85);
+  };
+  btn.addEventListener("pointerdown", go);
+  for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) {
+    btn.addEventListener(ev, stopManual);
+  }
+}
+buttons.brake.onclick = stopManual;
+buttons.undock.onclick = async () => {
+  stopManual();
+  for (let i = 0; i < 5; i++) {
+    await post("manual", {ly: 0.42, rx: 0, ttl: 200});
+    await new Promise(r => setTimeout(r, 140));
+  }
+  await post("manual", {ly: 0, rx: 0, ttl: 200});
+};
+const keyAxes = {
+  KeyW: [1, 0], ArrowUp: [1, 0],
+  KeyS: [-1, 0], ArrowDown: [-1, 0],
+  KeyA: [0, -1], ArrowLeft: [0, -1],
+  KeyD: [0, 1], ArrowRight: [0, 1],
+};
+function syncKeys() {
+  let ly = 0, rx = 0;
+  for (const code of keysDown) {
+    ly += keyAxes[code][0];
+    rx += keyAxes[code][1];
+  }
+  const s = Number(speedSelect.value);
+  startManual(Math.sign(ly) * s, Math.sign(rx) * s * 0.85);
+}
+document.addEventListener("keydown", event => {
+  if (!(event.code in keyAxes) || event.repeat || selection || document.activeElement?.tagName === "SELECT") return;
+  event.preventDefault();
+  keysDown.add(event.code);
+  syncKeys();
+});
+document.addEventListener("keyup", event => {
+  if (!keysDown.delete(event.code)) return;
+  syncKeys();
+});
+window.addEventListener("blur", stopManual);
+
+for (const box of policyBoxes) {
+  box.onchange = () => {
+    const policy = Object.fromEntries(policyBoxes.map(b => [b.dataset.policy, b.checked]));
+    command("policy", {policy});
+  };
 }
 
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) displayed.frame = 0;
+  if (document.hidden) {
+    displayed.frame = 0;
+    stopManual();
+  }
 });
 
 setInterval(() => {
   update();
-  if (!document.hidden && displayed.frame && status.owner === driver) {
+  const activeState = status.state !== "OFF" && status.state !== "LOST";
+  if (status.role !== "viewer" && !document.hidden && displayed.frame && activeState && (status.owner === driver || (status.autonomous && status.owner))) {
     post("heartbeat", {frame: displayed.frame}).catch(() => {});
   }
 }, 250);
 
+updateCompanion = addCompanionTools(() => ({
+  live: previewIsLive() && Boolean(presented) && !selection && presented.boot === status.boot,
+  image: presented?.image,
+  frame: presented?.frame,
+  dock: status.dock,
+  moving: status.manual_active || status.state === "FOLLOWING" || manualTimer !== null,
+}), () => command("home"));
 refresh();
 update();
 </script>

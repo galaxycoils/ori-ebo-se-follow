@@ -7,6 +7,14 @@ const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const { createInterface } = require("node:readline");
 const path = require("node:path");
+const {roomMatch, savedLandmarks} = require("../demo/companion.js");
+
+const firstLandmark = Array.from({length: 144}, (_, i) => i === 0 ? 1 : 0);
+const secondLandmark = Array.from({length: 144}, (_, i) => i === 1 ? 1 : 0);
+assert.equal(roomMatch(firstLandmark, [firstLandmark, secondLandmark]), 0);
+assert.equal(roomMatch(firstLandmark, [firstLandmark, firstLandmark]), -1);
+assert.equal(roomMatch(null, [firstLandmark, secondLandmark]), -1);
+assert.equal(savedLandmarks(JSON.stringify([firstLandmark, [3]])).length, 0);
 
 function launchBrowser() {
   return chromium.launch({
@@ -24,6 +32,8 @@ async function testDemo(base) {
     await page.goto(base);
     await page.evaluate(async () => { await transport; });
     await page.waitForFunction(() => displayed.frame > 0 && status.boot);
+    const manifest = await page.request.get(new URL("manifest.webmanifest", page.url()).href);
+    assert.deepEqual((await manifest.json()).icons.map(icon => icon.sizes), ["192x192", "512x512"]);
     const isStatic = await page.evaluate(() => document.documentElement.dataset.preview === "pages");
     const previousBoot = await page.evaluate(async () => {
       const api = await transport;
@@ -73,6 +83,7 @@ async function testDemo(base) {
     await page.keyboard.press("Escape");
 
     // Manual drag box -> confirm -> Stop immediately clears displayed.box.
+    await page.waitForFunction(() => previewIsLive());
     await drawBox();
     await page.getByRole("button", { name: "Confirm selection" }).click();
     await page.waitForFunction(() => status.state === "TRACKING" && Array.isArray(displayed.box));
@@ -126,8 +137,33 @@ async function testDemo(base) {
     await page.getByRole("button", { name: "Return home" }).click();
     await page.waitForFunction(() => status.dock === "charging");
     assert(await page.getByRole("button", { name: "Return home" }).isHidden());
+    await page.getByText("Dock route", {exact: true}).click();
+    await page.getByRole("button", {name: "Teach dock"}).click();
+    assert.match(await page.locator("#route-text").textContent(), /capture the clear approach/);
     await page.getByRole("button", { name: "Lift off base (demo)" }).click();
     await page.waitForFunction(() => status.dock === "idle" && status.state === "OFF");
+    await page.getByRole("button", {name: "Capture landmark"}).click();
+    assert.match(await page.locator("#route-text").textContent(), /1 landmarks? captured/);
+    await page.getByRole("button", {name: "Capture landmark"}).click();
+    assert.match(await page.locator("#route-text").textContent(), /distinct view/);
+    await page.getByRole("button", {name: "Cancel teaching"}).click();
+    await page.getByText("Camera clips", {exact: true}).click();
+    const downloaded = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Save snapshot"}).click();
+    assert.equal((await downloaded).suggestedFilename(), "ori-snapshot.png");
+    const record = page.getByRole("button", {name: "Record clip"});
+    if (await record.isVisible()) {
+      await record.click();
+      await page.waitForTimeout(400);
+      await page.getByRole("button", {name: "End clip"}).click();
+      await page.getByRole("link", {name: "Download clip"}).waitFor();
+      assert.match(await page.locator("#playback").getAttribute("src"), /^blob:/);
+    }
+    await page.waitForFunction(() => navigator.serviceWorker.controller);
+    await page.context().setOffline(true);
+    await page.reload({waitUntil: "domcontentloaded"});
+    assert.equal(await page.title(), "Ori Companion");
+    await page.context().setOffline(false);
     assert.deepEqual(errors, []);
     console.log(`Phone-sized browser flow passed (${isStatic ? "WebAssembly" : "loopback"})`);
   } finally {
@@ -164,7 +200,21 @@ async function testOwnerAuth() {
     await page.goto(pairUrl);
     await page.waitForFunction(() => displayed.frame > 0 && status.boot);
     assert.equal(page.url(), base + "/");
-    console.log("Owner-token pairing authentication check passed");
+    await page.getByText("Family viewing", {exact: true}).click();
+    await page.getByRole("button", {name: "Create viewing link"}).click();
+    const input = page.getByRole("textbox", {name: "Family viewing link"});
+    await input.waitFor();
+    const guest = await browser.newContext();
+    const viewer = await guest.newPage();
+    await viewer.goto(await input.inputValue());
+    await viewer.waitForFunction(() => status.role === "viewer" && displayed.frame > 0);
+    assert(await viewer.getByRole("button", {name: "Stop", exact: true}).isDisabled());
+    const blocked = await guest.request.post(base + "/api/stop", {headers: {Origin: base}, data: {}});
+    assert.equal(blocked.status(), 403);
+    await page.getByRole("button", {name: "Revoke viewing link"}).click();
+    await page.getByText("Viewing link revoked.", {exact: true}).waitFor();
+    assert.equal((await guest.request.get(base + "/api/frame")).status(), 401);
+    console.log("Owner pairing, family view, and revocation passed");
   } finally {
     await browser.close();
     lines.close();

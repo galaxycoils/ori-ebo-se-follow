@@ -1,16 +1,25 @@
-"""Transport for the desktop simulator. Its output is a trace, never motor I/O."""
+"""Transport for the desktop simulator and ori-bridge. Output is JSON status; control fd handles hardware."""
 
 import json
 import subprocess
 from pathlib import Path
 
 BINARY = Path(__file__).resolve().parents[1] / "build" / "ori-replay"
+BRIDGE_BINARY = Path(__file__).resolve().parents[1] / "build" / "ori-bridge"
 
 
 class ReplayClient:
+    def __init__(self, binary=BINARY, args=(), pass_fds=()):
+        self.binary = Path(binary)
+        self.args = list(args)
+        self.pass_fds = tuple(pass_fds)
+
     def __enter__(self):
         self.process = subprocess.Popen(
-            [BINARY], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            [str(self.binary), *self.args],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            pass_fds=self.pass_fds,
         )
         return self
 

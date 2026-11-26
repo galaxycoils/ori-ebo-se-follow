@@ -10,6 +10,12 @@ Runtime::Runtime(Hardware& hardware, Milliseconds maxDriveTtl)
 
 void Runtime::synchronize(std::initializer_list<Inhibit> activeInhibits,
                           DockSignal initialDock, Milliseconds now) {
+    synchronizeInhibits(activeInhibits, now);
+    engine_.observeDock(initialDock, now);
+    dispatch(now);
+}
+
+void Runtime::synchronizeInhibits(std::initializer_list<Inhibit> activeInhibits, Milliseconds now) {
     constexpr std::array<Inhibit, 5> external = {
         Inhibit::Manual, Inhibit::Docking, Inhibit::Sleep,
         Inhibit::LowBattery, Inhibit::Obstacle,
@@ -20,7 +26,6 @@ void Runtime::synchronize(std::initializer_list<Inhibit> activeInhibits,
     for (Inhibit cause : activeInhibits) {
         engine_.setInhibit(cause, true);
     }
-    engine_.observeDock(initialDock, now);
     synchronized_ = true;
     dispatch(now);
 }
@@ -112,6 +117,42 @@ bool Runtime::requestHome(std::uint64_t driver, std::uint64_t generation, Millis
 void Runtime::observeDock(DockSignal signal, Milliseconds sampled) {
     engine_.observeDock(signal, sampled);
     dispatch(sampled);
+}
+
+void Runtime::observeBattery(int percent, bool charging, Milliseconds now) {
+    engine_.observeBattery(percent, charging, now);
+    dispatch(now);
+}
+
+void Runtime::setPolicy(const Policy& policy, Milliseconds now) {
+    engine_.setPolicy(policy, now);
+    dispatch(now);
+}
+
+bool Runtime::resumeMemory(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
+    if (!synchronized_) return false;
+    const bool accepted = engine_.resumeMemory(driver, generation, now);
+    dispatch(now);
+    return accepted;
+}
+
+bool Runtime::forgetMemory(std::uint64_t driver, Milliseconds now) {
+    const bool accepted = engine_.forgetMemory(driver, now);
+    dispatch(now);
+    return accepted;
+}
+
+bool Runtime::lockSpotted(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
+    if (!synchronized_) return false;
+    const bool accepted = engine_.lockSpotted(driver, generation, now);
+    dispatch(now);
+    return accepted;
+}
+
+bool Runtime::deserializeMemory(std::string_view data, bool armWatch, Milliseconds now) {
+    const bool accepted = engine_.deserializeMemory(data, armWatch);
+    dispatch(now);
+    return accepted;
 }
 
 void Runtime::dispatch(Milliseconds now) {

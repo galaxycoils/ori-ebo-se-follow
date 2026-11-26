@@ -1,10 +1,14 @@
 #include "adapter.hpp"
+#ifdef ORI_TEST_BRIDGE
+#include "mavlink.hpp"
+#endif
 #include "ori.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -105,6 +109,9 @@ void testSteering() {
     expect(steering, {180, 65, 80, 80}, Motion::Hold);
     expect(steering, {180, 65, 80, 80}, Motion::Right);
     expect(steering, {66, 65, 80, 80}, Motion::Hold);
+    // Wide-angle off-axis size/rise tolerance must still turn toward target.
+    steering.reset();
+    expect(steering, {40, 50, 96, 96}, Motion::Left);
 }
 
 void testBoxAndTracker() {
@@ -131,6 +138,20 @@ void testBoxAndTracker() {
     const Box nearEdge{236, 95, 80, 80};
     assert(tracker.select(makeFrame(3, 300, {nearEdge}), nearEdge));
     assert(tracker.update(makeFrame(4, 400, {{238, 97, 80, 80}})));
+
+    // Fast camera turn shift (64 px in a single frame) must stay locked via wide fallback.
+    assert(tracker.select(makeFrame(10, 410, {{140, 60, 72, 72}}), {140, 60, 72, 72}));
+    assert(tracker.update(makeFrame(11, 420, {{76, 62, 72, 72}})));
+    assert(std::abs(tracker.box().x - 76) <= 2);
+
+    // Smooth wall/bedding linear gradient (high variance, zero texture structure) must be rejected.
+    Frame wallGradient = makeFrame(12, 430, {});
+    for (int r = 40; r < 120; ++r) {
+        for (int c = 80; c < 160; ++c) {
+            wallGradient.pixels[r * ori::imageWidth + c] = static_cast<std::uint8_t>(30 + (c - 80) * 2);
+        }
+    }
+    assert(!tracker.select(wallGradient, {80, 40, 80, 80}));
 
     // Two visually identical targets near each other must fail ambiguity check.
     assert(tracker.select(makeFrame(5, 500, {{120, 65, 45, 45}}), {120, 65, 45, 45}));
@@ -258,6 +279,179 @@ void testAcceleratedSoak() {
     assert(runtime.telemetry().framesAccepted == 1000);
 }
 
+#ifdef ORI_TEST_BRIDGE
+void testMavlinkAndKalayHardware() {
+    const auto motor = ori::mavlink::motorFrame(0.5f, 0.0f);
+    assert(motor.size() == 25); // 6 header + 17 payload + 2 CRC
+    assert(motor[0] == 0xFEu && motor[1] == 17 && motor[5] == 202);
+    float lyNeg = 0.0f;
+    std::memcpy(&lyNeg, motor.data() + 10, sizeof(float));
+    assert(std::abs(lyNeg - (-0.5f)) < 1e-6f);
+
+    const auto dock = ori::mavlink::dockFrame();
+    assert(dock.size() == 12); // 6 header + 4 payload + 2 CRC
+    assert(dock[0] == 0xFEu && dock[1] == 4 && dock[5] == 200);
+    assert(dock[6] == (ori::mavlink::cmdDock & 0xFFu) &&
+           dock[7] == ((ori::mavlink::cmdDock >> 8) & 0xFFu));
+
+    std::uint8_t batPayload[18]{};
+    batPayload[16] = 83; // battery % at packet offset 22
+    batPayload[17] = 1;  // charging flag at packet offset 23
+    const auto batFrame = ori::mavlink::packFrame(207, batPayload, sizeof(batPayload), 0);
+    const auto parsed = ori::mavlink::parseBatteryStatus(batFrame.data(), batFrame.size());
+    assert(parsed.has_value() && parsed->batteryPercent == 83 && parsed->charging == 1);
+
+    // Safety-locked KalayHardware (followEnabled=false) emits zero motor frames on Follow.
+    std::vector<std::vector<std::uint8_t>> packets;
+    ori::mavlink::KalayHardware locked(
+        [&packets](const std::uint8_t* data, std::size_t len) {
+            packets.emplace_back(data, data + len);
+            return true;
+        },
+        false);
+    ori::Runtime lockedRt(locked);
+    locked.bindEngine(&lockedRt.engine());
+    lockedRt.synchronize({}, DockSignal::Idle, 100);
+    const Box ref{120, 65, 80, 80};
+    lockedRt.frame(makeFrame(1, 100, {ref}), 100);
+    assert(lockedRt.select(1, lockedRt.engine().generation(), 1, ref, 100));
+    lockedRt.frame(makeFrame(2, 200, {ref}), 200);
+    assert(lockedRt.heartbeat(1, lockedRt.engine().generation(), 2, 200));
+    lockedRt.frame(makeFrame(3, 300, {ref}), 300);
+    assert(lockedRt.heartbeat(1, lockedRt.engine().generation(), 3, 300));
+    assert(lockedRt.teach(1, lockedRt.engine().generation(), 300));
+    assert(lockedRt.start(1, lockedRt.engine().generation(), 300));
+    lockedRt.frame(makeFrame(4, 400, {{100, 65, 80, 80}}), 400);
+    assert(lockedRt.heartbeat(1, lockedRt.engine().generation(), 4, 400));
+    lockedRt.frame(makeFrame(5, 500, {{78, 65, 80, 80}}), 500);
+    assert(packets.empty());
+
+    // Unlocked KalayHardware alternates proportional turn pulse with 0,0 settle frame, and revokes before dock.
+    locked.setFollowEnabled(true);
+    lockedRt.frame(makeFrame(6, 600, {{78, 65, 80, 80}}), 600);
+    assert(packets.size() == 1);
+    assert(packets.back()[4] == 0 && packets.back()[5] == 0xFEu && packets.back()[10] == 202);
+    float turnRx = 0.0f;
+    std::memcpy(&turnRx, packets[0].data() + 19, sizeof(float));
+    assert(turnRx < -0.11f && turnRx >= -0.25f);
+    assert(lockedRt.heartbeat(1, lockedRt.engine().generation(), 6, 600));
+    lockedRt.frame(makeFrame(7, 700, {{78, 65, 80, 80}}), 700);
+    assert(packets.size() == 2); // Settle tick sends 0,0
+    float settleRx = 1.0f;
+    std::memcpy(&settleRx, packets[1].data() + 19, sizeof(float));
+    assert(std::abs(settleRx) < 1e-6f);
+    assert(lockedRt.requestHome(1, lockedRt.engine().generation(), 700));
+    assert(packets.size() == 4); // revokeDrive (202 stop) followed by dock (200)
+    assert(packets[2][10] == 202 && packets[3][10] == 200);
+}
+#endif
+
+void testIntelligentMemorySpotAndDock() {
+    ori::Engine engine;
+    ori::Policy pol{};
+    pol.autoReacquire = true;
+    pol.autoGap = true;
+    pol.autoSpot = true;
+    pol.baseWatch = true;
+    pol.autoDockLowBattery = true;
+    pol.autoDockIdle = true;
+    pol.autoDockDisconnect = true;
+    pol.idleTimeoutMs = 5000;
+    engine.setPolicy(pol, 100);
+
+    // Base watch: allow tracking while charging, block Following, preserve lock on lift.
+    for (int t = 100; t <= 2000; t += 500) {
+        engine.observeBattery(92, true, t);
+    }
+    assert(engine.dockState() == DockState::Charging);
+    const Box target{120, 65, 80, 80};
+    engine.frame(makeFrame(1, 2000, {target}), 2000);
+    assert(engine.select(1, engine.generation(), 1, target, 2000));
+    assert(engine.state() == State::Tracking);
+    engine.frame(makeFrame(2, 2100, {target}), 2100);
+    assert(engine.heartbeat(1, engine.generation(), 2, 2100));
+    engine.frame(makeFrame(3, 2200, {target}), 2200);
+    assert(engine.heartbeat(1, engine.generation(), 3, 2200));
+    assert(engine.state() == State::Ready); // auto-gap
+    assert(!engine.start(1, engine.generation(), 2200)); // blocked on base
+
+    engine.observeBattery(92, false, 2250);
+    assert(engine.dockState() == DockState::Unknown);
+    engine.observeDock(DockSignal::Idle, 2300); // verified stationary off base
+    assert(engine.dockState() == DockState::Idle);
+    assert(engine.state() == State::Ready);
+    assert(engine.start(1, engine.generation(), 2300));
+    assert(engine.state() == State::Following);
+
+    // An uncertain frame pauses driving. Three matching frames restore visual tracking only.
+    for (int f = 4; f <= 7; ++f) {
+        const Milliseconds t = 2000 + f * 100;
+        engine.frame(makeFrame(f, t, {}), t);
+        assert(engine.heartbeat(1, engine.generation(), f, t));
+        assert(engine.state() == State::Ready && engine.decision().motion == Motion::Hold);
+        assert(!engine.start(1, engine.generation(), t));
+    }
+    engine.frame(makeFrame(8, 2800, {}), 2800);
+    assert(engine.state() == State::Lost && engine.decision().motion == Motion::Hold);
+    assert(engine.memoryStatus() == "searching");
+    for (int i = 9; i <= 11; ++i) {
+        engine.frame(makeFrame(i, i * 100 + 2000, {{40, 65, 80, 80}}), i * 100 + 2000);
+        assert(engine.decision().motion == Motion::Hold);
+        if (i < 11) assert(engine.state() == State::Lost);
+    }
+    assert(!engine.heartbeat(2, engine.generation(), 7, 3100));
+    assert(engine.owner() == ori::systemOwner);
+    assert(engine.heartbeat(1, engine.generation(), 11, 3100));
+    assert(!engine.forgetMemory(2, 3100));
+    assert(engine.state() == State::Ready && engine.memoryStatus() == "locked");
+    assert(engine.box().has_value() && std::abs(engine.box()->x - 40) <= 2);
+
+    // Serialize/deserialize round-trip, stop disarms auto-reacquire, resume/forget work.
+    const std::string blob = engine.serializeMemory();
+    assert(!blob.empty());
+    assert(engine.stop(1, 3100));
+    assert(engine.memoryStatus() == "saved");
+    engine.frame(makeFrame(12, 3200, {target}), 3200);
+    assert(engine.state() == State::Off); // Stop stays Off
+    assert(engine.resumeMemory(1, engine.generation(), 3200));
+    for (int i = 13; i <= 15; ++i) engine.frame(makeFrame(i, i * 100 + 2000, {target}), i * 100 + 2000);
+    assert(engine.state() == State::Ready);
+    assert(engine.forgetMemory(1, 3500));
+    assert(engine.memoryStatus() == "none");
+
+    ori::Engine restored;
+    restored.setPolicy(pol, 100);
+    restored.observeDock(DockSignal::Idle, 100);
+    assert(restored.deserializeMemory(blob, true));
+    for (int i = 1; i <= 3; ++i) restored.frame(makeFrame(i, (i + 1) * 100, {{180, 65, 80, 80}}), (i + 1) * 100);
+    assert(restored.state() == State::Ready && restored.isAutonomous());
+    assert(restored.stop(1, 400));
+
+    // Motion spotter detects moving textured subject after stationary frames.
+    ori::Engine spotter;
+    spotter.setPolicy(pol, 100);
+    spotter.observeDock(DockSignal::Idle, 100);
+    for (int i = 1; i <= 3; ++i) spotter.frame(makeFrame(i, i * 100, {}), i * 100);
+    for (int i = 4; i <= 6; ++i) spotter.frame(makeFrame(i, i * 100, {{110 + i * 2, 60, 72, 72}}), i * 100);
+    assert(spotter.spottedBox().has_value());
+    assert(spotter.state() == State::Tracking && spotter.isAutonomous());
+    assert(spotter.forgetMemory(1, 600));
+
+    // Low-battery auto-dock (<=20%) and idle timeout auto-dock.
+    spotter.observeBattery(19, false, 700);
+    assert(spotter.dockState() == DockState::Requested);
+    assert(spotter.takeDockAction() == DockAction::Start);
+    assert(spotter.autoDockReason() == "auto-dock-low-battery");
+
+    ori::Engine idleEng;
+    idleEng.setPolicy(pol, 100);
+    for (int t = 100; t <= 6000; t += 1000) {
+        idleEng.observeDock(DockSignal::Idle, t);
+    }
+    assert(idleEng.dockState() == DockState::Requested);
+    assert(idleEng.autoDockReason() == "auto-dock-idle");
+}
+
 } // namespace
 
 int main() {
@@ -266,5 +460,9 @@ int main() {
     testDockAndStopFixes();
     testRuntimeAdapter();
     testAcceleratedSoak();
-    std::cout << "Core, tracker, dock, adapter, and soak tests passed\n";
+#ifdef ORI_TEST_BRIDGE
+    testMavlinkAndKalayHardware();
+#endif
+    testIntelligentMemorySpotAndDock();
+    std::cout << "Native core and soak tests passed\n";
 }

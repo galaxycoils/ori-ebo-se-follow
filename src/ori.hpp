@@ -6,6 +6,7 @@
 #include <deque>
 #include <optional>
 #include <set>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -24,6 +25,18 @@ constexpr Milliseconds dockAcknowledgement = 3000;
 constexpr Milliseconds dockReturnLimit = 60000;
 constexpr Milliseconds dockTelemetryLimit = 1500;
 constexpr Milliseconds dockChargeConfirmation = 1500;
+constexpr std::uint64_t systemOwner = 9007199254740991ULL;
+
+struct Policy {
+    bool autoReacquire = false;
+    bool autoGap = false;
+    bool autoSpot = false;
+    bool baseWatch = false;
+    bool autoDockLowBattery = false;
+    bool autoDockIdle = false;
+    bool autoDockDisconnect = false;
+    Milliseconds idleTimeoutMs = 90000;
+};
 
 struct Box {
     int x, y, width, height;
@@ -76,22 +89,35 @@ private:
 
 class Tracker {
 public:
-    bool select(const Frame& frame, Box box);
-    bool update(const Frame& frame);
-    Box box() const { return box_; }
-
-private:
     static constexpr int patchSide = 12;
     using Patch = std::array<double, patchSide * patchSide>;
+
+    bool select(const Frame& frame, Box box);
+    bool update(const Frame& frame);
+    bool reacquire(const Frame& frame, Box sizeHint);
+    Box box() const { return box_; }
+    double confidence() const { return confidence_; }
+    const Patch& anchor() const { return original_; }
+    void setAnchor(const Patch& patch, Box box);
+    static bool hasTexture(const Frame& frame, Box box);
+
+private:
     struct Candidate { Box box; double score; };
+    static void smoothFrame(const Frame& src, std::vector<std::uint8_t>& dst);
+    static bool hasEdgeContrast(const Patch& rawPatch);
+    static std::optional<Patch> readPatchPixels(const std::uint8_t* pixels, Box box, bool checkEdge);
     static std::optional<Patch> readPatch(const Frame& frame, Box box);
-    std::optional<double> scoreBox(const Frame& frame, Box box,
+    std::optional<double> scoreBox(const std::uint8_t* pixels, Box box,
                                    const std::array<int, patchSide>& rowOffsets,
                                    const std::array<int, patchSide>& colOffsets) const;
 
     Box box_{};
     Patch original_{};
     Patch recent_{};
+    int vx_ = 0;
+    int vy_ = 0;
+    double confidence_ = 0.0;
+    std::vector<std::uint8_t> smoothed_;
     std::vector<Candidate> candidates_;
 };
 
@@ -112,14 +138,30 @@ public:
 
     bool requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
     void observeDock(DockSignal signal, Milliseconds sampled);
+    void observeBattery(int percent, bool charging, Milliseconds now);
     DockAction takeDockAction();
     DockState dockState() const { return dockState_; }
     std::uint64_t dockOwner() const { return dockOwner_; }
     bool canRequestHome(Milliseconds now) const;
 
+    void setPolicy(const Policy& policy, Milliseconds now);
+    const Policy& policy() const { return policy_; }
+    bool resumeMemory(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    bool forgetMemory(std::uint64_t driver, Milliseconds now);
+    bool lockSpotted(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    std::string serializeMemory() const;
+    bool deserializeMemory(std::string_view data, bool armWatch);
+
     State state() const { return state_; }
     std::uint64_t generation() const { return generation_; }
     std::uint64_t owner() const { return owner_; }
+    bool isAutonomous() const { return owner_ == systemOwner || dockOwner_ == systemOwner; }
+    int confidencePercent() const;
+    std::string_view memoryStatus() const;
+    std::optional<Box> spottedBox() const { return spottedStreak_ >= 2 ? spottedBox_ : std::nullopt; }
+    int batteryPercent() const { return batteryPercent_; }
+    bool batteryCharging() const { return batteryCharging_; }
+    std::string_view autoDockReason() const { return autoDockReason_; }
     std::uint64_t displayedFrame() const { return displayed_; }
     std::optional<Milliseconds> frameCaptured(std::uint64_t frameId) const;
     const std::set<Inhibit>& inhibits() const { return inhibits_; }
@@ -131,8 +173,11 @@ private:
     struct Calibration { Box box; int jitter; };
     std::optional<Calibration> calibration() const;
     bool owns(std::uint64_t driver, std::uint64_t generation) const;
+    bool inhibitsBlockTracking() const;
     void hold(std::string_view reason);
     void clear(State state, std::string_view reason);
+    bool triggerAutoHome(std::string_view reason, Milliseconds now);
+    void updateSpotter(const Frame& frame);
 
     std::set<Inhibit> inhibits_;
     bool dockInProgress() const;
@@ -147,6 +192,30 @@ private:
     Milliseconds chargeSince_ = -1;
     Milliseconds lastNow_ = 0;
     bool dockFailure_ = false;
+
+    Policy policy_{};
+    bool remembered_ = false;
+    bool memoryArmed_ = false;
+    bool hasGap_ = false;
+    Box taughtBox_{};
+    int taughtJitter_ = 3;
+    int missStreak_ = 0;
+    std::optional<Box> reacquireBox_;
+    int reacquireStreak_ = 0;
+
+    std::vector<std::uint8_t> bg_;
+    int stationaryFrames_ = 0;
+    std::optional<Box> spottedBox_;
+    int spottedStreak_ = 0;
+    bool autoSpotArmed_ = true;
+
+    int batteryPercent_ = -1;
+    bool batteryCharging_ = false;
+    std::string_view autoDockReason_ = "none";
+    Milliseconds idleSince_ = -1;
+    bool autoDockLowBatTriggered_ = false;
+    bool autoDockIdleTriggered_ = false;
+    bool autoDockDisconnectTriggered_ = false;
 
     State state_ = State::Off;
     std::uint64_t generation_ = 1;

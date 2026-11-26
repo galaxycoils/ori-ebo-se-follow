@@ -38,6 +38,7 @@ public:
     explicit Runtime(Hardware& hardware, Milliseconds maxDriveTtl = factoryCommandLimit);
 
     void synchronize(std::initializer_list<Inhibit> activeInhibits, DockSignal initialDock, Milliseconds now);
+    void synchronizeInhibits(std::initializer_list<Inhibit> activeInhibits, Milliseconds now);
     void frame(Frame frame, Milliseconds now);
     void tick(Milliseconds now);
     bool select(std::uint64_t driver, std::uint64_t generation, std::uint64_t frameId,
@@ -52,6 +53,12 @@ public:
 
     bool requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
     void observeDock(DockSignal signal, Milliseconds sampled);
+    void observeBattery(int percent, bool charging, Milliseconds now);
+    void setPolicy(const Policy& policy, Milliseconds now);
+    bool resumeMemory(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    bool forgetMemory(std::uint64_t driver, Milliseconds now);
+    bool lockSpotted(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    bool deserializeMemory(std::string_view data, bool armWatch, Milliseconds now);
 
     bool synchronized() const { return synchronized_; }
     bool driveOwned() const { return driveOwned_; }

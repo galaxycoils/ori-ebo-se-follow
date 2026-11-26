@@ -18,14 +18,16 @@ make demo
 
 The retreat fixture finishes with `HOLD → FORWARD → HOLD`. `make bench` runs `build/ori-probe --synthetic 18000` (an accelerated 30-minute @ 10 FPS soak check verifying zero missed 100 ms deadlines and zero wheel commands). Open `http://127.0.0.1:8765` for the loopback demo. Tap the center of the textured target to start Track only, or press **Enter** / **Space** on the focused preview. For a custom box, drag tightly around it and confirm (or press **Escape** to cancel). Set the gap while the target is still. Press **Follow** to watch a simulated turn, advance, and stop. In **Track only**, use **Move demo target** to see the tracker move the box while simulated wheels hold. If a frozen selection expires, the preview returns to live video so you can tap again. **Stop** ends the session and clears the selection and gap.
 
-For authenticated LAN, HTTPS, or local video playback:
+Serve Ori on the Mac mini using a trusted TLS certificate for phone installation and owner access. The video option accepts a camera URL or a local file.
 
 ```sh
-python3 demo/server.py --bind 0.0.0.0 --require-auth
+python3 demo/server.py --bind 0.0.0.0 --require-auth --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 python3 demo/server.py --video private/walk.mp4
 ```
 
-Non-loopback `--bind` requires `--require-auth` or `--token`, and prints a one-time pairing URL (`/?token=...`) that sets an `HttpOnly; SameSite=Strict` cookie (`Secure` when `--tls-cert` and `--tls-key` are set).
+Open the printed owner pairing URL. Install Ori from the browser’s **Add to Home Screen** or **Install app** menu. **Family viewing** creates one revocable read-only link when the server uses owner authentication. A new link replaces the previous link, and restarting the server ends sharing.
+
+Use **Camera clips** for snapshots, local playback, downloadable recordings up to 60 seconds, and on-screen motion alerts. To save a selected pet across restarts, start the local server with `--memory-file private/target_memory.json`. With auto-remember enabled, three consistent frames can restore tracking after a lock is lost. Tap **Follow** to resume driving.
 
 The simulator uses generated images and wheel decisions. It needs no robot, SDK, private footage, or network service.
 
@@ -34,6 +36,8 @@ With Playwright and Chromium installed, run `make test-browser` to exercise the 
 ## Return to the charging base
 
 Use **Return home** to end Follow and hand control to the factory docking routine in the simulator. The page shows return progress, contact verification and confirmed charging. Stop cancels an active request. **Lift off base (demo)** resets the simulated charger for another run. Low-battery returns initiated by the factory are observed without sending a duplicate start.
+
+Open **Dock route** while charging and choose **Teach dock**. Capture the first landmark while stationary, off the base, and facing a clear docking approach. Capture distinct dock-facing views farther along the same room, then save. **Guide me home** recognizes taught views and prompts you to steer through the route. The app enables **Dock from here** after three matches at the taught approach. Landmarks stay in the phone browser.
 
 For the original SE, Enabot specifies a clear approach within two metres in front of the base. Physical return reliability and charging time still require a comparison on Ori. [Enabot EBO SE](https://www.enabot.com/home-robot/ebo-se) · [Bench procedure](docs/device.md#return-to-charge-verification)
 

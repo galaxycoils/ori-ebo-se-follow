@@ -2,7 +2,7 @@
 import createReplay from "./ori.mjs";
 import fixtures from "./fixtures.mjs";
 
-const ACTIONS = new Set(["select", "teach", "follow", "heartbeat", "track", "stop", "move", "home", "lift"]);
+const ACTIONS = new Set(["select", "teach", "follow", "heartbeat", "track", "stop", "move", "home", "lift", "resume", "forget", "spot", "policy", "manual", "motors", "clear-route"]);
 
 function* movement(start) {
   for (const [end, steps] of fixtures.legs) {
@@ -154,7 +154,32 @@ export async function createSimulator() {
         }
         return {...status, accepted: false};
       }
+      if (action === "clear-route") {
+        return run("clear-route", now);
+      }
+      if (action === "manual") {
+        const ly = Number(payload.ly), rx = Number(payload.rx), ttl = Math.round(Number(payload.ttl ?? 280));
+        if (!Number.isFinite(ly) || !Number.isFinite(rx) || ly < -1 || ly > 1 || rx < -1 || rx > 1) throw new Error("Invalid manual drive");
+        if ((ly || rx) && generation !== status.generation) return {...status, accepted: false};
+        return run("manual-drive", now, driver, ly.toFixed(3), rx.toFixed(3), Math.min(400, Math.max(50, ttl)));
+      }
+      if (action === "motors") {
+        const en = payload.enabled ? 1 : 0;
+        const fwd = Number(payload.forward_speed ?? 0.30), turn = Number(payload.turn_speed ?? 0.22);
+        const inv = payload.invert_turn ? 1 : 0;
+        return run("set-motors", now, en, fwd.toFixed(3), turn.toFixed(3), inv);
+      }
+      if (action === "policy") {
+        const p = payload.policy || {};
+        const keys = ["auto_reacquire", "auto_gap", "auto_spot", "base_watch",
+                      "auto_dock_low_battery", "auto_dock_idle", "auto_dock_disconnect"];
+        return run("policy", now, ...keys.map(k => p[k] ? 1 : 0), Math.max(1000, Number(p.idle_timeout_ms || 90000)));
+      }
       const args = [driver, generation];
+      if (action === "resume" || action === "forget" || action === "spot") {
+        const cmd = action === "resume" ? "resume-memory" : action === "forget" ? "forget-memory" : "spot-lock";
+        return run(cmd, now, ...args);
+      }
       if (action === "select" || action === "heartbeat") {
         if (!Number.isSafeInteger(payload.frame) || payload.frame <= 0 || payload.frame > frame) {
           throw new Error("Invalid frame");

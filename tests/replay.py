@@ -361,9 +361,106 @@ def test_invalid_zero_driver_stop(s):
     assert not res["accepted"] and res["generation"] == generation
 
 
+def test_ori_bridge_pipes():
+    import os, subprocess
+    bridge = Path(__file__).resolve().parents[1] / "build" / "ori-bridge"
+    r_fd, w_fd = os.pipe()
+    try:
+        # 1) Safety-locked Track/Follow + battery-telemetry -> dock transition over pipe.
+        with ReplayClient(binary=bridge, args=["--control-fd", str(w_fd)], pass_fds=(w_fd,)) as client:
+            os.close(w_fd)
+            w_fd = -1
+            s = Scenario(client)
+            assert not s.control("home")["accepted"]  # No real battery telemetry yet.
+            s.now = 100
+            bat = s.run("battery-telemetry", 85, 0)
+            assert not bat["can_home"]
+            assert dock_signal(s, "idle")["can_home"]
+            s.ready()
+            assert s.control("follow")["state"] == "FOLLOWING"
+            for x in (113, 106, 99, 92, 85, 78):
+                st = s.frame((x, 65, 80, 80), ack=True)
+            assert st["motion"] == "LEFT" and not st["follow_enabled"]
+            assert s.control("home")["dock"] == "requested"
+            assert s.run("battery-telemetry", 85, 0)["dock"] == "requested"
+            assert dock_signal(s, "returning")["dock"] == "returning"
+            for _ in range(4):
+                s.now += 500
+                docked = s.run("battery-telemetry", 86, 1)
+            assert docked["dock"] == "charging"
+        os.set_blocking(r_fd, False)
+        emitted = os.read(r_fd, 4096)
+        assert len(emitted) == 17 and emitted[4] == 0 and emitted[5] == 0xFE and emitted[10] == 200
+    finally:
+        if w_fd >= 0:
+            os.close(w_fd)
+        os.close(r_fd)
+
+    # 2) Cradle deadman test emits exactly one forward MAVLink packet and exits 0.
+    r_fd, w_fd = os.pipe()
+    try:
+        cradle = subprocess.run(
+            [str(bridge), "--control-fd", str(w_fd), "--cradle-test", "--max-ttl", "50", "--send-stop"],
+            pass_fds=(w_fd,), capture_output=True, text=True, check=True,
+        )
+        os.close(w_fd)
+        w_fd = -1
+        report = json.loads(cradle.stdout)
+        assert report["mode"] == "cradle-test" and report["packets_sent"] == 1 and report["zero_stop_sent"]
+        os.set_blocking(r_fd, False)
+        raw = os.read(r_fd, 4096)
+        assert len(raw) == 60 and raw[10] == 202 and raw[40] == 202
+    finally:
+        if w_fd >= 0:
+            os.close(w_fd)
+        os.close(r_fd)
+
+    # A legacy motor history cannot initiate or replay movement.
+    with ReplayClient(binary=bridge, args=["--enable-follow"]) as client:
+        s = Scenario(client)
+        assert not s.run("import-route", "r1", 1, 350, 0, 200)["accepted"]
+        assert not s.control("home")["accepted"]
+        assert dock_signal(s, "idle")["can_home"]
+        assert s.control("home")["dock_starts"] == 1
+        assert s.run("battery-telemetry", 88, 0)["dock"] == "requested"
+        assert not s.run("manual-drive", 1, 0.35, 0.0, 200)["accepted"]
+
+
+
+def test_smart_memory_and_autodock(s):
+    s.run("policy", 1, 1, 1, 1, 1, 1, 1, 5000)
+    assert not s.run("battery-telemetry", 80, 0)["can_home"]
+    assert dock_signal(s, "idle")["can_home"]
+    s.frame(REFERENCE)
+    assert s.control("select", s.seq, *REFERENCE)["state"] == "TRACKING"
+    s.frame(REFERENCE, ack=True)
+    st = s.frame(REFERENCE, ack=True)
+    assert st["state"] == "READY" and st["reason"] == "gap-auto-set"
+    blob = s.run("export-memory")["memory_blob"]
+    assert blob.startswith("v1 ")
+    assert s.control("follow")["state"] == "FOLLOWING"
+    for _ in range(5):
+        assert s.frame(ack=True)["motion"] == "HOLD"
+    for _ in range(2):
+        assert s.frame((40, 65, 80, 80))["state"] == "LOST"
+    resumed = s.frame((40, 65, 80, 80), ack=True)
+    assert resumed["state"] == "READY" and abs(resumed["box"][0] - 40) <= 2
+    assert s.run("battery-telemetry", 18, 0)["dock"] == "requested"
+    assert s.status["auto_dock_reason"] == "auto-dock-low-battery"
+
+    # Manual drive overrides state, emits manual_active=True, and deadman expires on frame/tick.
+    m = s.run("manual-drive", OWNER, 0.4, -0.2, 200)
+    assert m["accepted"] and m["manual_active"]
+    s.now += 200
+    assert not s.run("tick")["manual_active"]
+    sm = s.run("set-motors", 1, 0.45, 0.35)
+    assert sm["follow_enabled"]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", choices=["retreat"])
+    parser.add_argument("--bridge", action="store_true")
     args = parser.parse_args()
     if args.case:
         with ReplayClient() as client:
@@ -384,6 +481,7 @@ def main():
         test_stale_calibration, test_frozen_selection,
         test_overlapping_inhibits, test_track_cancels_pending_follow,
         test_turn, test_motion_expiry, test_selection, test_heartbeat_before_selection, test_track_owner_expiry,
+        test_smart_memory_and_autodock,
     ]
     tests += [lambda s, kind=kind: test_invalid_frames(s, kind)
               for kind in ("duplicate", "stale", "future", "out-of-order")]
@@ -395,7 +493,9 @@ def main():
     for test in tests:
         with ReplayClient() as client:
             test(Scenario(client))
-    print(f"{len(tests)} replay scenarios passed")
+    if args.bridge:
+        test_ori_bridge_pipes()
+    print(f"{len(tests) + args.bridge} replay scenarios passed")
 
 
 if __name__ == "__main__":

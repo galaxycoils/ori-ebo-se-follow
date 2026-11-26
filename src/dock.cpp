@@ -38,8 +38,10 @@ bool Engine::canRequestHome(Milliseconds now) const {
 
 bool Engine::requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
     tick(now);
-    if (!driver || generation != generation_ || (owner_ && driver != owner_) ||
+    const bool replacingAuto = (owner_ == systemOwner && driver != 0);
+    if (!driver || generation != generation_ || (owner_ && driver != owner_ && !replacingAuto) ||
         !canRequestHome(now)) return false;
+    autoDockReason_ = "owner-home";
     setInhibit(Inhibit::ReturnHome, true);
     dockStarted_ = now;
     dockOwner_ = driver;
@@ -47,6 +49,43 @@ bool Engine::requestHome(std::uint64_t driver, std::uint64_t generation, Millise
     dockState_ = DockState::Requested;
     dockAction_ = DockAction::Start;
     return true;
+}
+
+bool Engine::triggerAutoHome(std::string_view reason, Milliseconds now) {
+    if (!canRequestHome(now)) return false;
+    autoDockReason_ = reason;
+    setInhibit(Inhibit::ReturnHome, true);
+    dockStarted_ = now;
+    dockOwner_ = systemOwner;
+    dockFailure_ = false;
+    dockState_ = DockState::Requested;
+    dockAction_ = DockAction::Start;
+    return true;
+}
+
+void Engine::observeBattery(int percent, bool charging, Milliseconds now) {
+    batteryPercent_ = percent;
+    batteryCharging_ = (charging > 0);
+    const bool critical = percent >= 0 && charging == 0 &&
+                          percent <= (policy_.autoDockLowBattery ? 10 : 15);
+    setInhibit(Inhibit::LowBattery, critical);
+
+    if (charging) {
+        observeDock(DockSignal::Charging, now);
+        autoDockLowBatTriggered_ = false;
+        autoDockIdleTriggered_ = false;
+        autoDockDisconnectTriggered_ = false;
+        autoDockReason_ = "none";
+    } else if (dockSignal_ == DockSignal::Charging) {
+        observeDock(DockSignal::Unknown, now);
+    }
+
+    if (policy_.autoDockLowBattery && !autoDockLowBatTriggered_ &&
+        charging == 0 && percent > 10 && percent <= 20) {
+        if (triggerAutoHome("auto-dock-low-battery", now)) {
+            autoDockLowBatTriggered_ = true;
+        }
+    }
 }
 
 DockAction Engine::takeDockAction() {

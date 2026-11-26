@@ -12,6 +12,8 @@ out = Path(sys.argv[1])
 html = (source / "index.html").read_text().replace('<html lang="en">', '<html lang="en" data-preview="pages">')
 (out / "index.html").write_text(html.replace("Desktop replay demo", "GitHub Pages simulator"))
 shutil.copyfile(source / "simulator.mjs", out / "simulator.mjs")
+for asset in ("companion.js", "sw.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"):
+    shutil.copyfile(source / asset, out / asset)
 
 sizes = [box[2] for box, _ in MOVEMENT]
 smallest, largest = min(sizes), max(sizes)

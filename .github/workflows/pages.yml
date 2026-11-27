@@ -1,0 +1,59 @@
+name: Ori simulator
+
+on:
+  push:
+    branches: [main, ori-firmware-prototype]
+  pull_request:
+    branches: [main, ori-firmware-prototype]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ori-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install FFmpeg and test native core, sanitizers, soak benchmark, and replay
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          make test test-asan bench
+      - name: Install Emscripten and build the simulator
+        run: |
+          git clone --quiet --depth 1 --branch 4.0.23 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install 4.0.23
+          "$RUNNER_TEMP/emsdk/emsdk" activate 4.0.23
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          make pages
+      - name: Test phone controls
+        env:
+          NODE_PATH: ${{ runner.temp }}/ori-browser/node_modules
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ori-browser" playwright@1.58.2
+          "$RUNNER_TEMP/ori-browser/node_modules/.bin/playwright" install --with-deps chromium webkit
+          make test-browser
+          ORI_TEST_WEBKIT=1 make test-browser
+          ORI_TEST_PAGES=1 node tests/browser.cjs
+          ORI_TEST_WEBKIT=1 ORI_TEST_PAGES=1 node tests/browser.cjs
+      - uses: actions/upload-pages-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          path: build/pages
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      pages: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - id: pages
+        uses: actions/deploy-pages@v4

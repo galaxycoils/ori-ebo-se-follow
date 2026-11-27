@@ -1,0 +1,22 @@
+# Minimal native ARM64 Android bionic runtime for Ori's Kalay P2P shim.
+# Compiles ori_kalay_shim.c directly against Android bionic via Termux clang,
+# eliminating manual vendor/bionic extraction on Apple Silicon Macs.
+FROM --platform=linux/arm64 termux/termux-docker:aarch64 AS builder
+
+USER 1000:1000
+RUN apt-get update && apt-get install -y --no-install-recommends clang
+COPY --chown=1000:1000 bridge/ori_kalay_shim.c /data/data/com.termux/files/home/ori_kalay_shim.c
+RUN clang -O2 -std=c11 -Wall -Wextra -Wpedantic /data/data/com.termux/files/home/ori_kalay_shim.c \
+    -o /data/data/com.termux/files/home/ori_kalay_shim -ldl
+
+FROM --platform=linux/arm64 termux/termux-docker:aarch64
+
+USER 1000:1000
+COPY --from=builder --chown=1000:1000 /data/data/com.termux/files/home/ori_kalay_shim /data/data/com.termux/files/usr/bin/ori_kalay_shim
+
+ENV EBO_LIB_DIR=/opt/ori/vendor/lib \
+    EBO_IOCTL9930=/opt/ori/vendor/ioctl9930.bin \
+    ORI_CONTROL_FD=0 \
+    LD_LIBRARY_PATH=/opt/ori/vendor/lib:/data/data/com.termux/files/usr/lib:/system/lib64
+
+ENTRYPOINT ["/data/data/com.termux/files/usr/bin/ori_kalay_shim"]

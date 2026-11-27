@@ -2,99 +2,345 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#edf0e9">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#edf1ee">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./icon-192.png">
 <title>Ori Companion</title>
 <style>
 :root {
   color-scheme: light;
-  font: 16px/1.5 "Inter", system-ui, sans-serif;
-  color: #243028;
-  background: #edf0e9;
+  --bg: #edf1ee;
+  --surface: #f8faf8;
+  --surface-alt: #e2e8e4;
+  --border: #ccd7cf;
+  --divider: #dce5de;
+  --text: #132018;
+  --muted: #465a4e;
+  --accent: #0f6848;
+  --accent-text: #ffffff;
+  --stop: #b42735;
+  --focus: #0a6b42;
+  --pill-bg: #e2e8e4;
+  --pill-ok-bg: #daf2e2;
+  --pill-ok-fg: #0d5238;
+  --pill-warn-bg: #fdf1d2;
+  --pill-warn-fg: #6b4c08;
+  --canvas-bg: #0f1612;
+  font: 15px/1.42 "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
 }
-body { margin: 0; }
-main { width: min(640px, calc(100% - 32px)); margin: 28px auto; }
-header { position: sticky; top: 0; z-index: 1; padding: 8px 0; background: #edf0e9; display: flex; gap: 16px; align-items: center; justify-content: space-between; }
-h1 { margin: 0; font-size: 1.65rem; letter-spacing: -.04em; }
-.mode { font-size: .85rem; color: #4e6053; }
-.card { background: #fff; border: 1px solid #d4ded4; border-radius: 16px; overflow: hidden; margin-top: 12px; }
-canvas { width: 100%; height: auto; display: block; touch-action: none; background: #222; }
-.controls { padding: 16px; }
+:root[data-theme="night"] {
+  color-scheme: dark;
+  --bg: #0a0f0c;
+  --surface: #121915;
+  --surface-alt: #19231d;
+  --border: #27372d;
+  --divider: #202d25;
+  --text: #e5efe8;
+  --muted: #98b0a0;
+  --accent: #2ba672;
+  --accent-text: #04130b;
+  --stop: #d63646;
+  --focus: #5be0a0;
+  --pill-bg: #19231d;
+  --pill-ok-bg: #163726;
+  --pill-ok-fg: #8ce7b3;
+  --pill-warn-bg: #3b2f13;
+  --pill-warn-fg: #f4d17a;
+  --canvas-bg: #060907;
+}
+html { scrollbar-gutter: stable; }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 max(12px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
+}
+header {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  min-height: 54px;
+  padding: calc(6px + env(safe-area-inset-top)) 0 6px;
+  background: var(--bg);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px; }
+.brand-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+h1 { margin: 0; font-size: 1.4rem; letter-spacing: -.03em; line-height: 1.1; }
+.mode { font-size: .82rem; color: var(--muted); }
+.pills {
+  display: flex; flex-wrap: nowrap; gap: 6px; min-height: 22px; max-width: 100%;
+  overflow-x: auto; scrollbar-width: none; align-items: center;
+}
+.pill {
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px; font-size: .75rem; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: var(--pill-bg); color: var(--muted); border: 1px solid var(--border);
+}
+.pill.ok { background: var(--pill-ok-bg); color: var(--pill-ok-fg); border-color: transparent; }
+.pill.warn { background: var(--pill-warn-bg); color: var(--pill-warn-fg); border-color: transparent; }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .06);
+}
+.viewport-col { min-width: 0; background: var(--surface); }
+canvas#preview {
+  width: 100%; height: auto; aspect-ratio: 16 / 9; display: block;
+  touch-action: none; background: var(--canvas-bg);
+}
+.controls { padding: 12px 14px 14px; min-width: 0; }
+.primary-deck { min-height: 120px; display: flex; flex-direction: column; justify-content: flex-start; }
 .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-button {
-  min-height: 44px; padding: 7px 12px; background: #f2f6f0; color: #243028;
-  border: 1px solid #c6d4c7; border-radius: 8px; font: inherit; cursor: pointer;
+button, select, input {
+  font: inherit;
+  color: var(--text);
 }
-button:disabled { opacity: .5; cursor: default; }
-button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline-offset: 2px; }
-#confirm, #follow { background: #15583b; border-color: #15583b; color: white; }
-#stop { color: #fff; background: #962d35; border-color: #962d35; }
-#status { margin: 0 0 12px; font-weight: 650; }
-#help { margin: 12px 0 0; color: #405148; }
-#motion, #telemetry { display: block; margin-top: 8px; font: .85rem ui-monospace, monospace; color: #405148; }
-.autonomy { margin-top: 10px; font-size: .85rem; color: #405148; }
-.autonomy summary { cursor: pointer; font-weight: 600; }
-.drawer { border-top: 1px solid #e6ede6; padding-top: 10px; }
-.drawer p { margin: 8px 0; }
-.drawer video { width: 100%; margin: 10px 0; background: #222; }
+button, select { font-variant-numeric: tabular-nums; }
+button {
+  min-height: 44px; padding: 7px 12px;
+  background: var(--surface-alt); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+select {
+  min-height: 36px; padding: 4px 8px;
+  background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px;
+}
+input[type="text"], input:not([type]) {
+  min-height: 36px; padding: 5px 9px;
+  background: var(--surface-alt); border: 1px solid var(--border); border-radius: 8px;
+}
+button:disabled { opacity: .48; cursor: default; }
+button:focus-visible, canvas:focus-visible, select:focus-visible, input:focus-visible {
+  outline: 3px solid var(--focus); outline-offset: 2px;
+}
+#confirm, #follow, #teach, #track { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+#stop { color: #fff; background: var(--stop); border-color: var(--stop); min-width: 74px; font-weight: 700; flex-shrink: 0; }
+#status { margin: 0; font-size: 1.04rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+#help, #follow-status { margin: 3px 0 8px; max-width: 72ch; color: var(--muted); font-size: .9rem; }
+#control-actions { margin: auto 0 8px; }
+#follow, #teach, #track { grid-column: 1 / -1; }
+#preview:focus-visible { outline-offset: -4px; }
+.cam-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 8px 12px; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider);
+  background: var(--surface);
+}
+.cam-bar button { min-height: 36px; padding: 5px 10px; font-size: .84rem; }
+.cam-bar button[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600;
+}
+.cam-ctrl { display: inline-flex; align-items: center; gap: 6px; font-size: .84rem; color: var(--muted); }
+.tool-tabs {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 6px; border-top: 1px solid var(--divider);
+}
+.tool-tabs button {
+  min-height: 36px; padding: 5px 10px; font-size: .84rem; border-radius: 8px; flex: 0 1 auto;
+}
+.tool-tabs button[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600;
+}
+#motion { display: block; margin: 2px 0 8px; font-size: .86rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+#telemetry, #safety-telemetry {
+  display: block; margin-top: 6px; font: .82rem "SF Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; color: var(--muted);
+}
+details.drawer, details.manual, details.autonomy {
+  margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--divider);
+  font-size: .9rem; color: var(--muted);
+}
+details > summary {
+  min-height: 40px; align-content: center; cursor: pointer;
+  font-weight: 650; color: var(--text);
+}
+details[open] > summary { margin-bottom: 6px; }
+.drawer p { margin: 6px 0; }
+.drawer video { width: 100%; margin: 8px 0; border-radius: 10px; background: var(--canvas-bg); }
 .drawer .actions { margin-top: 8px; }
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
   button { transition: background-color .12s, border-color .12s; }
-  button:hover:enabled { border-color: #15583b; }
+  button:hover:enabled { border-color: var(--accent); }
+}
+@media (min-width: 840px) {
+  main { max-width: 1180px; }
+  .card { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, .92fr); align-items: start; }
+  .viewport-col { border-right: 1px solid var(--divider); }
+  .cam-bar { border-bottom: 0; }
+  .primary-deck { min-height: 152px; }
 }
 @media (orientation: landscape) and (max-height: 500px) {
-  main { margin-top: 8px; }
-  .card { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+  main { margin-top: 2px; max-width: 100%; }
+  .card { display: grid; grid-template-columns: 1.05fr .95fr; align-items: start; }
+  .viewport-col { border-right: 1px solid var(--divider); }
+  .cam-bar { border-bottom: 0; }
+  .primary-deck { min-height: 100px; }
 }
-.toggles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
-.toggles label { display: flex; align-items: center; gap: 6px; }
-.manual { margin-top: 12px; padding-top: 10px; border-top: 1px solid #e6ede6; }
-.manual-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: .85rem; }
-.dpad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; max-width: 260px; }
-.dpad button { min-height: 40px; font-weight: 600; touch-action: none; }
-#motors.armed { background: #15583b; border-color: #15583b; color: #fff; }
+.toggles, .hw-toggles {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px;
+}
+.toggles label, .hw-toggles label, .patrol-options label {
+  display: flex; align-items: center; gap: 6px; color: var(--text); font-size: .86rem;
+}
+.manual-bar, .patrol-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  justify-content: space-between; margin-bottom: 8px; font-size: .86rem;
+}
+.patrol-options { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 6px 0 8px; }
+.joy-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.joypad {
+  position: relative; width: clamp(114px, 38vw, 150px); aspect-ratio: 1;
+  border: 1px solid var(--border); border-radius: 50%; touch-action: none; user-select: none;
+  background: radial-gradient(circle, var(--surface-alt) 0%, var(--pill-bg) 100%);
+  cursor: grab; display: grid; place-items: center; padding: 0;
+}
+.joypad:active { cursor: grabbing; }
+.joypad[aria-disabled="true"] { opacity: .5; cursor: default; }
+.joypad span { pointer-events: none; }
+.joypad .axis { position: absolute; color: var(--muted); font-size: .85rem; line-height: 1; }
+.joypad .up { top: 9px; } .joypad .down { bottom: 9px; }
+.joypad .left { left: 10px; } .joypad .right { right: 10px; }
+.joypad .thumb {
+  z-index: 1; width: 43%; aspect-ratio: 1; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .28), inset 0 0 0 2px #ffffff36;
+  transform: translate(var(--stick-x, 0px), var(--stick-y, 0px));
+}
+.joy-actions { display: flex; flex-direction: column; gap: 8px; }
+.joy-status, #patrol-status { color: var(--muted); font-size: .85rem; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+#patrol-map { width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 10px; border: 1px solid var(--border); touch-action: manipulation; }
+#patrol-name-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+#patrol-name { min-width: 0; flex: 1 1 140px; max-width: 100%; }
+#share-link { width: 100%; margin-top: 6px; }
+#diagnostic-timing { display: block; overflow-wrap: anywhere; margin-top: 6px; font: .8rem "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+@media (max-width: 350px) {
+  .controls { padding: 10px 12px; }
+  .toggles, .hw-toggles { grid-template-columns: 1fr; }
+}
 [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <header><div><h1>Ori</h1><span class="mode">Desktop replay demo</span></div><button id="stop">Stop</button></header>
-  <section class="card" aria-label="Preview and tracking controls">
-    <canvas id="preview" width="320" height="180" tabindex="0" aria-label="Demo live preview. Tap, drag, or press Enter to select the target."></canvas>
-    <div class="controls">
-      <p id="status" role="status">Waiting for the preview</p>
-      <div id="control-actions" class="actions">
-        <button id="confirm" hidden>Confirm selection</button>
-        <button id="cancel" hidden>Cancel selection</button>
-        <button id="track">Track only</button>
-        <button id="teach">Set gap here</button>
-        <button id="follow">Follow</button>
-        <button id="resume" hidden>Resume target</button>
-        <button id="spot" hidden>Lock spotted</button>
-        <button id="forget" hidden>Forget target</button>
-        <button id="home">Return home</button>
-        <button id="undock" hidden>Undock</button>
-        <button id="motors" hidden>Motors: Locked</button>
-        <button id="lift" hidden>Lift off base (demo)</button>
-        <button id="move">Move demo target</button>
+  <header>
+    <div class="brand">
+      <div class="brand-row"><h1>Ori</h1><span class="mode">Desktop replay demo</span></div>
+      <div class="pills" aria-live="polite">
+        <span id="battery-pill" class="pill" hidden></span>
+        <span id="safety-pill" class="pill" hidden></span>
       </div>
-      <div id="drive-pad" class="manual">
+    </div>
+    <button id="stop" disabled>Stop</button>
+  </header>
+  <section class="card" aria-label="Preview and tracking controls">
+    <div class="viewport-col">
+      <canvas id="preview" width="640" height="360" tabindex="0" aria-label="Camera. Tap, drag, or press Enter to select the target."></canvas>
+      <div id="camera-bar" class="cam-bar" aria-label="Camera color and night options">
+        <button id="camera-color" type="button" aria-pressed="false">Color</button>
+        <label class="cam-ctrl">Night <select id="night-mode" aria-label="Night mode">
+          <option value="off">Day</option>
+          <option value="auto">Auto night</option>
+          <option value="night">Night IR</option>
+          <option value="boost">Low-light boost</option>
+        </select></label>
+        <label class="cam-ctrl" id="ir-tint-label" hidden>Style <select id="ir-tint" aria-label="Night style">
+          <option value="clean">Crisp B&amp;W</option>
+          <option value="emerald">Night green</option>
+        </select></label>
+        <button id="theme-toggle" type="button" aria-pressed="false">Dark UI</button>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="primary-deck">
+        <p id="status" role="status">Connecting to camera</p>
+        <p id="help"></p>
+        <p id="follow-status" role="status" hidden></p>
+        <output id="motion" hidden></output>
+        <div id="control-actions" class="actions">
+          <button id="confirm" hidden>Confirm selection</button>
+          <button id="cancel" hidden>Cancel selection</button>
+          <button id="track" hidden>Pause Follow</button>
+          <button id="teach" hidden>Set gap here</button>
+          <button id="follow" hidden>Start Follow</button>
+          <button id="resume" hidden>Resume target</button>
+          <button id="spot" hidden>Lock spotted</button>
+          <button id="home" disabled>Return to Dock</button>
+          <button id="lift" hidden>Lift off base (demo)</button>
+          <button id="move" hidden>Move demo target</button>
+        </div>
+      </div>
+      <div id="tool-tabs" class="tool-tabs" role="toolbar" aria-label="Companion tools">
+        <button type="button" data-panel="drive-pad" aria-pressed="false" aria-expanded="false">Drive</button>
+        <button type="button" data-panel="patrol-tools" aria-pressed="false" aria-expanded="false" hidden>Patrol</button>
+        <button type="button" data-panel="room-tools" aria-pressed="false" aria-expanded="false">Dock</button>
+        <button type="button" data-panel="clip-tools" aria-pressed="false" aria-expanded="false">Clips</button>
+        <button type="button" data-panel="sharing" aria-pressed="false" aria-expanded="false" hidden>Family viewing</button>
+        <button type="button" data-panel="autonomy" aria-pressed="false" aria-expanded="false">Auto</button>
+        <button type="button" data-panel="diagnostics" aria-pressed="false" aria-expanded="false">Diag</button>
+      </div>
+      <details id="drive-pad" class="manual">
+        <summary>Manual drive</summary>
         <div class="manual-bar">
-          <strong>Manual Drive (WASD / Arrows)</strong>
-          <label>Speed <select id="speed"><option value="0.20">Slow</option><option value="0.30" selected>Normal</option><option value="0.48">Fast</option></select></label>
+          <label>Speed <select id="speed"><option value="0.20">Slow</option><option value="0.30" selected>Normal</option><option value="0.48">Fast</option><option value="0.60">Turbo</option><option value="0.72">Max</option></select></label>
           <label><input id="invert-turn" type="checkbox"> Invert turn</label>
         </div>
-        <div class="dpad">
-          <span></span><button type="button" data-ly="1" data-rx="0" aria-label="Drive forward">Fwd</button><span></span>
-          <button type="button" data-ly="0" data-rx="-1" aria-label="Turn left">Left</button><button id="brake" type="button">Brake</button><button type="button" data-ly="0" data-rx="1" aria-label="Turn right">Right</button>
-          <span></span><button type="button" data-ly="-1" data-rx="0" aria-label="Drive back">Back</button><span></span>
+        <div class="joy-controls">
+          <button id="joypad" class="joypad" type="button" aria-label="Drive joypad" aria-describedby="joy-status" aria-disabled="true">
+            <span class="axis up" aria-hidden="true">▲</span><span class="axis down" aria-hidden="true">▼</span>
+            <span class="axis left" aria-hidden="true">◀</span><span class="axis right" aria-hidden="true">▶</span>
+            <span class="thumb"></span>
+          </button>
+          <div class="joy-actions">
+            <button id="brake" type="button">Brake</button>
+            <button id="undock" type="button" hidden>Step off dock</button>
+          </div>
         </div>
-      </div>
-      <p id="help">Tap the target to track it, or drag a box for a custom selection.</p>
-      <output id="telemetry">Mode: Simulator · Memory: none</output>
-      <output id="motion">Simulated motion · HOLD</output>
+        <p id="joy-status" class="joy-status" aria-live="polite">Waiting for live video.</p>
+        <div class="hw-toggles">
+          <label id="allow-follow-label" hidden><input id="allow-follow" type="checkbox"> Allow Physical Follow</label>
+          <label><input id="toggle-eyes" type="checkbox" checked> Eye lights</label>
+          <label><input id="toggle-avoid" type="checkbox" checked> Obstacle safety</label>
+          <label><input id="toggle-fall" type="checkbox" checked> Fall safety</label>
+        </div>
+      </details>
+      <details id="patrol-tools" class="autonomy drawer" hidden>
+        <summary>Patrol area</summary>
+        <p id="patrol-status" role="status"></p>
+        <div class="patrol-bar">
+          <label>Mode <select id="patrol-kind" aria-label="Patrol mode">
+            <option value="area">Area auto-patrol</option>
+            <option value="checkpoints">Checkpoints</option>
+            <option value="factory">Factory roving</option>
+          </select></label>
+          <label>Laps <select id="patrol-laps" aria-label="Patrol laps">
+            <option value="1">1 lap</option>
+            <option value="3">3 laps</option>
+            <option value="0">Continuous</option>
+          </select></label>
+        </div>
+        <div id="patrol-options" class="patrol-options">
+          <label><input id="patrol-spot" type="checkbox"> Pause on pet</label>
+          <label><input id="patrol-dock" type="checkbox"> Dock when done</label>
+        </div>
+        <canvas id="patrol-map" width="320" height="180" aria-label="Patrol area map. Select two opposite corners." hidden></canvas>
+        <label id="patrol-name-label" hidden>Checkpoint name <input id="patrol-name" maxlength="40"></label>
+        <div class="actions">
+          <button id="patrol-edit">Set patrol area</button>
+          <button id="patrol-capture" hidden>Capture checkpoint</button>
+          <button id="patrol-save" hidden>Save patrol area</button>
+          <button id="patrol-start" hidden>Start patrol</button>
+          <button id="patrol-stop" hidden>End patrol</button>
+        </div>
+      </details>
       <details id="room-tools" class="autonomy drawer">
         <summary>Dock route</summary>
         <p id="route-text" aria-live="polite">Start teaching while Ori is charging.</p>
@@ -107,7 +353,7 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
           <button id="dock-approach" hidden>Dock from here</button>
         </div>
       </details>
-      <details class="autonomy drawer">
+      <details id="clip-tools" class="autonomy drawer">
         <summary>Camera clips</summary>
         <div class="actions">
           <button id="snapshot" disabled>Save snapshot</button>
@@ -120,7 +366,7 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
         <p id="motion-alert-status" role="status"></p>
       </details>
       <details id="sharing" class="autonomy drawer" hidden>
-        <summary>Family viewing</summary>
+        <summary>Family link</summary>
         <div class="actions">
           <button id="create-share">Create viewing link</button>
           <button id="revoke-share">Revoke viewing link</button>
@@ -129,7 +375,8 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
         <input id="share-link" aria-label="Family viewing link" readonly hidden>
       </details>
       <details id="autonomy" class="autonomy">
-        <summary>Autonomy</summary>
+        <summary>Autonomy and target memory</summary>
+        <button id="forget" hidden>Forget target</button>
         <div class="toggles">
           <label><input type="checkbox" data-policy="auto_reacquire"> Auto-remember</label>
           <label><input type="checkbox" data-policy="auto_gap"> Auto-gap</label>
@@ -138,6 +385,15 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
           <label><input type="checkbox" data-policy="auto_dock_low_battery"> Low-battery dock</label>
           <label><input type="checkbox" data-policy="auto_dock_idle"> Idle dock (90s)</label>
           <label><input type="checkbox" data-policy="auto_dock_disconnect"> Disconnect dock</label>
+        </div>
+      </details>
+      <details id="diagnostics" class="autonomy drawer">
+        <summary>Diagnostics</summary>
+        <output id="telemetry"></output>
+        <output id="safety-telemetry"></output>
+        <output id="diagnostic-timing"></output>
+        <div class="actions">
+          <button id="cutoff-test" type="button" hidden>Verify wheel cutoff</button>
         </div>
       </details>
     </div>
@@ -150,17 +406,63 @@ button:focus-visible, canvas:focus-visible { outline: 3px solid #09613c; outline
 const canvas = document.querySelector("#preview");
 const ctx = canvas.getContext("2d");
 let updateCompanion = () => {};
-const uiTimings = {frameAgeMs: null, decodeMs: null, feedbackMs: null, acknowledgementMs: null};
+const uiTimings = Object.fromEntries(["frameAgeMs", "frameIntervalMs", "serverMs", "decodeMs", "feedbackMs",
+  "acknowledgementMs"].map(metric => [metric, []]));
+const diagnostics = document.querySelector("#diagnostics");
+const drivePad = document.querySelector("#drive-pad");
+const toolTabs = [...document.querySelectorAll("#tool-tabs button[data-panel]")].map(tab => ({
+  tab,
+  panel: document.getElementById(tab.dataset.panel),
+}));
+let syncingTabs = false;
+const THEME_STORAGE_KEY = "ori-ui-theme";
+const mode = document.querySelector(".mode");
+const batteryPill = document.querySelector("#battery-pill");
+const safetyPill = document.querySelector("#safety-pill");
+const cameraBar = document.querySelector("#camera-bar");
+const colorButton = document.querySelector("#camera-color");
+const nightSelect = document.querySelector("#night-mode");
+const irTintSelect = document.querySelector("#ir-tint");
+const irTintLabel = document.querySelector("#ir-tint-label");
+const themeToggle = document.querySelector("#theme-toggle");
+const allowFollowBox = document.querySelector("#allow-follow");
+const allowFollowLabel = document.querySelector("#allow-follow-label");
+const toggleEyes = document.querySelector("#toggle-eyes");
+const toggleAvoid = document.querySelector("#toggle-avoid");
+const toggleFall = document.querySelector("#toggle-fall");
+const safetyTelemetry = document.querySelector("#safety-telemetry");
+let uiNightTheme = (() => {
+  try { return localStorage.getItem(THEME_STORAGE_KEY) === "night"; } catch { return false; }
+})();
+let droppedFrames = 0;
+let nextTimingUpdate = 0;
+
+function sample(metric, elapsed) {
+  if (!Number.isFinite(elapsed)) return;
+  const samples = uiTimings[metric];
+  samples.push(elapsed);
+  if (samples.length > 512) samples.shift();
+}
+
+function timingSummary() {
+  return Object.fromEntries(Object.entries(uiTimings).map(([metric, samples]) => {
+    const sorted = [...samples].sort((a, b) => a - b);
+    return [metric, {count: sorted.length, p95: sorted[Math.ceil(sorted.length * .95) - 1],
+      max: sorted[sorted.length - 1]}];
+  }));
+}
 const buttons = Object.fromEntries(
   [...document.querySelectorAll("button")].map(button => [button.id, button])
 );
 const statusText = document.querySelector("#status");
 const help = document.querySelector("#help");
+const followStatus = document.querySelector("#follow-status");
 const telemetry = document.querySelector("#telemetry");
 const motion = document.querySelector("#motion");
 const speedSelect = document.querySelector("#speed");
 const invertTurnBox = document.querySelector("#invert-turn");
-const dpadButtons = [...document.querySelectorAll("#drive-pad button[data-ly]")];
+const joypad = document.querySelector("#joypad");
+const joyStatus = document.querySelector("#joy-status");
 const policyBoxes = [...document.querySelectorAll("input[data-policy]")];
 const driver = (() => {
   try {
@@ -178,21 +480,39 @@ const retiredBoots = new Set();
 let displayed = { frame: 0, imageFrame: 0, image: null, box: null };
 let presented = null;
 let selection = null;
+let gesture = null;
 let startPoint = null;
 let lastTag = "";
-let dragging = false;
+let lastStatusTag = "";
+let previewEpoch = 0;
+let refreshFailures = 0;
+let frameAbort = null;
+let pageClosing = false;
+let heartbeatPending = false;
+let previewWasLive = false;
+const automaticOwner = Number.MAX_SAFE_INTEGER;
 let pending = "";
 let fatal = "";
 let hint = "";
-let lastNewImage = -Infinity;
 let intent = 0;
-const previewIsLive = () => !fatal && !document.hidden &&
-  performance.now() - lastNewImage < (status.live_hardware ? 2500 : 750);
+let policyQueue = Promise.resolve();
+let policyTarget = null;
+let policyInFlight = 0;
+let cameraQueue = Promise.resolve();
+let cameraPending = {};
+let cameraInFlight = 0;
+let motorsQueue = Promise.resolve();
+let motorsPending = null;
+let motorsInFlight = 0;
+let acknowledgedSpeed = "0.30";
+const previewIsLive = (limit = 2200) => !fatal && !document.hidden && Boolean(displayed.frame) &&
+  presented?.boot === status.boot && performance.now() - presented.presentedAt < limit;
+const videoOnly = () => status.source_mode === "video";
 
 const labels = {
   OFF: "Tracking off",
-  TRACKING: "Track only",
-  READY: "Track only · gap set",
+  TRACKING: "Tracking target",
+  READY: "Tracking target",
   FOLLOWING: "Following",
   LOST: "Pet lost · select again",
 };
@@ -202,23 +522,102 @@ const reasons = {
   "heartbeat-expired": "The control session expired.",
   "preview-expired": "The preview stopped updating.",
   "selection-expired": "The selection expired. Tap the live target again.",
-  "selection-uncertain": "That selection could not be tracked. Tap the live target again.",
+  "selection-uncertain": "Could not track that box. Drag around the whole pet and try again.",
+  "follow-locked": "Follow is locked. Unlock Allow Physical Follow in Manual drive or track on camera.",
+  "dock-unconfirmed": "Waiting for Ori to confirm drive readiness off the dock.",
+  "target-uncertain": "Keep the same pet in view until tracking is steady.",
+  "on-base": "Use Manual drive or Step off dock to leave the base before starting Follow.",
+  "follow-session": "The preview or control session changed. Wait for live video and try again.",
+  "gap-required": "Set the gap before starting Follow.",
+  "coast-hold": "Target unclear. Ori is holding still.",
+  "manual-override": "Manual drive has control.",
+  "factory-veto": "The robot has blocked movement.",
+  "low-battery": "Battery too low for Follow.",
+  "distance-uncertain-or-close": "Ori is close to the pet or cannot judge the gap.",
+  "waiting-for-frame": "Waiting for the next camera frame.",
+  "gap-reached": "Holding at the set gap.",
+  "confirm-distance": "Checking the gap before moving.",
+  "confirm-turn-reversal": "Checking the direction before turning.",
+  "turn-runaway": "Turn paused to prevent spin. Toggle Invert turn in Manual drive if Ori turned away.",
+  "docking": "The dock controller has control.",
+  "sleep": "Wake Ori before starting Follow.",
 };
 
+function syncCanvasSize(el, fallbackWidth, fallbackHeight) {
+  const rect = el.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = rect.width || el.clientWidth;
+  const cssH = rect.height || el.clientHeight;
+  const w = cssW > 0 ? Math.round(cssW * dpr) : fallbackWidth;
+  const h = cssH > 0 ? Math.round(cssH * dpr) : fallbackHeight;
+  if (el.width !== w || el.height !== h) {
+    el.width = w;
+    el.height = h;
+  }
+}
+
+function drawReticle(x, y, w, h, color, dashed = false, showHandles = false, confidence = null) {
+  const px = Math.max(1, canvas.width / (canvas.clientWidth || 640));
+  const arm = Math.max(8 * px, Math.min(22 * px, Math.min(w, h) * 0.28));
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, px);
+  ctx.globalAlpha = 0.35;
+  ctx.setLineDash(dashed ? [6 * px, 5 * px] : []);
+  ctx.strokeRect(x, y, w, h);
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = Math.max(2, 2.4 * px);
+  ctx.lineCap = "square";
+  ctx.beginPath();
+  ctx.moveTo(x, y + arm); ctx.lineTo(x, y); ctx.lineTo(x + arm, y);
+  ctx.moveTo(x + w - arm, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + arm);
+  ctx.moveTo(x + w, y + h - arm); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - arm, y + h);
+  ctx.moveTo(x + arm, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - arm);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (showHandles) {
+    const hs = Math.max(5, 6 * px);
+    ctx.fillStyle = color;
+    for (const [hx, hy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
+      ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
+    }
+  }
+  if (confidence !== null && Number.isFinite(confidence)) {
+    const label = `${Math.round(confidence)}%`;
+    const fontSize = Math.round(11 * px);
+    ctx.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, sans-serif`;
+    const padX = 5 * px;
+    const pillH = fontSize + 6 * px;
+    const pillW = ctx.measureText(label).width + padX * 2;
+    const py = y >= pillH + 4 * px ? y - pillH - 3 * px : y + 3 * px;
+    const pxPos = Math.min(canvas.width - pillW - 2 * px, Math.max(2 * px, x));
+    ctx.fillStyle = "rgba(10, 15, 12, 0.78)";
+    ctx.fillRect(pxPos, py, pillW, pillH);
+    ctx.fillStyle = "#e5efe8";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, pxPos + padX, py + pillH / 2);
+  }
+  ctx.restore();
+}
+
 function paint() {
-  if (displayed.image) ctx.drawImage(displayed.image, 0, 0);
-  const region = selection ? selection.box : displayed.box;
+  syncCanvasSize(canvas, 640, 360);
+  if (displayed.image) ctx.drawImage(displayed.image, 0, 0, canvas.width, canvas.height);
+  else ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const sx = canvas.width / 320;
+  const sy = canvas.height / 180;
+  const region = selection ? selection.box : pending !== "stop" && !fatal &&
+    status.reason !== "coast-hold" && status.state !== "LOST" &&
+    previewIsLive() ? displayed.box : null;
   if (region) {
-    ctx.strokeStyle = selection ? "#ffce6e" : "#82ecab";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([]);
-    ctx.strokeRect(...region);
-  } else if (status.state === "OFF" && status.spotted_box) {
-    ctx.strokeStyle = "#6ee7ff";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([4, 3]);
-    ctx.strokeRect(...status.spotted_box);
-    ctx.setLineDash([]);
+    const tracked = !selection && status.state !== "OFF" && status.state !== "LOST";
+    const night = document.documentElement.dataset.theme === "night";
+    const color = selection ? "#f2c14e" : (night ? "#53e29e" : "#2ba672");
+    drawReticle(region[0] * sx, region[1] * sy, region[2] * sx, region[3] * sy,
+      color, false, Boolean(selection), tracked ? status.confidence : null);
+  } else if (status.state === "OFF" && status.frame === displayed.imageFrame && status.spotted_box) {
+    const sb = status.spotted_box;
+    drawReticle(sb[0] * sx, sb[1] * sy, sb[2] * sx, sb[3] * sy, "#6ee7ff", true, false, null);
   }
 }
 
@@ -226,10 +625,31 @@ function setText(element, value) {
   if (element.textContent !== value) element.textContent = value;
 }
 
+function applyTheme(night) {
+  const next = night ? "night" : "";
+  if (document.documentElement.dataset.theme !== next) {
+    if (next) document.documentElement.dataset.theme = "night";
+    else delete document.documentElement.dataset.theme;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = night ? "#0a0f0c" : "#edf1ee";
+  }
+  themeToggle.setAttribute("aria-pressed", String(Boolean(night)));
+  setText(themeToggle, night ? "Light UI" : "Dark UI");
+}
+
+function syncToolTabs() {
+  for (const {tab, panel} of toolTabs) {
+    if (panel.hidden && panel.open) panel.open = false;
+    tab.hidden = panel.hidden;
+    tab.setAttribute("aria-pressed", String(panel.open));
+    tab.setAttribute("aria-expanded", String(panel.open));
+  }
+}
+
 function update() {
-  const owner = status.owner === driver || Boolean(status.autonomous && status.owner);
+  const owner = status.owner === driver || status.owner === automaticOwner;
   const dockLabels = {
-    requested: "Requesting return to base",
+    requested: status.live_hardware ? "Dock request sent" : "Requesting return to base",
     returning: "Returning to base",
     "checking-charge": "Checking charging contacts",
     charging: "Charging on base",
@@ -237,131 +657,256 @@ function update() {
     failed: "Charging was not confirmed",
     unknown: "Checking base status",
   };
-  const busy = ((status.owner && !owner) || (status.dock_owner && status.dock_owner !== driver)) && !status.autonomous;
+  const busy = (status.owner && !owner) ||
+    (status.dock_owner && status.dock_owner !== driver && status.dock_owner !== automaticOwner);
   const viewing = status.role === "viewer";
   const live = previewIsLive();
-  const previewMessage = displayed.image ? "Waiting for live video" : "Connecting to preview";
+  if (live !== previewWasLive) {
+    previewWasLive = live;
+    paint();
+  }
+  const previewMessage = displayed.image ? "Video delayed" : "Connecting to camera";
   const showDock = Boolean(dockLabels[status.dock]) &&
-    !((status.dock === "failed" || status.dock === "charging") && status.state !== "OFF");
-  const stateLabel = viewing ? "Live view" : busy ? "Controlled by another tab"
+    !((status.dock === "failed" || status.dock === "charging" || status.dock === "unknown") && status.state !== "OFF");
+  const stateLabel = viewing ? "Live view" : busy ? "Controlled from another tab"
     : showDock ? dockLabels[status.dock] : labels[status.state];
   const feedback = ({stop: "Stopping…", select: "Selecting target…", follow: "Starting Follow…",
-    home: "Requesting return…", track: "Pausing drive…"})[pending] ?? "";
-  setText(statusText, fatal || feedback || (selection ? "Adjust selection" : !live ? previewMessage : hint || stateLabel));
-  const modeLabel = status.live_hardware ? (status.follow_enabled ? "Live Ori · Follow armed" : "Live Ori · Motor lock") : "Simulator";
-  const batLabel = status.battery_percent >= 0 ? ` · ${status.battery_percent}%${status.battery_charging ? " chg" : ""}` : "";
-  const memLabel = status.memory && status.memory !== "none" ? ` · Mem: ${status.memory}${status.confidence ? " " + status.confidence + "%" : ""}` : "";
-  const dockReason = status.auto_dock_reason && status.auto_dock_reason !== "none" ? ` · ${status.auto_dock_reason}` : "";
-  setText(telemetry, `${modeLabel}${batLabel}${memLabel}${dockReason}`);
-  setText(motion, (status.live_hardware ? "Motion · " : "Simulated motion · ") + (live ? status.motion : "unknown"));
-  setText(help, selection ? "Drag around the whole target, then confirm."
-    : reasons[status.reason] || ({
-      OFF: status.spotted_box ? "Motion spotted. Tap Lock spotted or draw a box." : "Tap the target to track it, or drag a box for a custom selection.",
-      LOST: status.memory === "searching" ? "Searching frame for remembered target…" : "Tap the target in the live picture to select it again.",
-      TRACKING: status.can_teach ? "Set the gap at the distance you want to keep." : "Hold the target steady to set the gap.",
-      READY: status.live_hardware && !status.follow_enabled ? "Target locked & gap saved (motors locked; tap Motors: Locked to arm)."
-        : status.live_hardware && status.dock === "charging" ? "Target locked. Tap Undock (or drive Forward) to leave base and press Follow."
-        : "Gap saved. Press Follow when you want Ori to move.",
-      FOLLOWING: "Track only pauses driving and keeps the target selected.",
-    })[status.state]);
+    home: "Requesting return…", track: "Pausing Follow…", teach: "Setting gap…"})[pending] ?? "";
+  setText(statusText, feedback || fatal || (selection ? "Adjust selection" : !live ? previewMessage : stateLabel));
+  const modeLabel = status.live_hardware ? "Live Ori" : videoOnly() ? "Camera footage"
+    : document.documentElement.dataset.preview === "pages" ? "GitHub Pages simulator" : "Desktop replay demo";
+  setText(mode, modeLabel + (viewing ? " · View only" : ""));
+
+  const hasBattery = status.battery_percent >= 0;
+  batteryPill.hidden = !hasBattery && !status.live_hardware;
+  if (!batteryPill.hidden) {
+    const batTxt = hasBattery ? `${status.battery_percent}%` : "--%";
+    const dockTxt = status.dock === "charging" ? "Charging" : status.dock === "idle" ? "Off dock" : status.dock || "Checking";
+    setText(batteryPill, `${batTxt} · ${dockTxt}`);
+    batteryPill.className = "pill " + (status.dock === "charging" || status.dock === "idle" ? "ok" : "warn");
+  }
+  safetyPill.hidden = !status.live_hardware;
+  if (status.live_hardware) {
+    const ready = Boolean(status.rdt_connected && status.cutoff_verified);
+    const followTxt = status.follow_enabled && status.dock === "idle" ? "Follow ready"
+      : status.follow_enabled ? "Follow armed" : "Follow locked";
+    const label = !status.rdt_connected ? "Drive link waiting"
+      : !status.cutoff_verified ? `Link ready · Cutoff unverified`
+      : `300ms cutoff · ${followTxt}`;
+    setText(safetyPill, label);
+    safetyPill.className = "pill " + (ready ? "ok" : "warn");
+  }
+
+  const cam = {...(status.camera || {color_mode: "color", night_mode: "off", ir_tint: "clean"}), ...cameraPending};
+  const isColor = cam.color_mode !== "bw";
+  colorButton.setAttribute("aria-pressed", String(isColor));
+  setText(colorButton, isColor ? "Color" : "B&W");
+  colorButton.disabled = viewing || Boolean(busy) || Boolean(cam.night_active);
+  if (nightSelect.value !== (cam.night_mode || "off")) nightSelect.value = cam.night_mode || "off";
+  if (irTintSelect.value !== (cam.ir_tint || "clean")) irTintSelect.value = cam.ir_tint || "clean";
+  nightSelect.disabled = irTintSelect.disabled = viewing || Boolean(busy);
+  irTintLabel.hidden = viewing || (cam.night_mode !== "night" && !cam.night_active);
+  applyTheme(uiNightTheme);
+  cameraBar.hidden = viewing;
+
+  const batLabel = hasBattery ? ` · Battery ${status.battery_percent}%` : "";
+  const memLabel = status.memory && status.memory !== "none" ? ` · Target memory ${status.memory}` : "";
+  setText(telemetry, modeLabel + batLabel + memLabel);
+  const diagParts = [
+    status.live_hardware
+      ? `RDT ${status.rdt_connected ? "connected" : "disconnected"} · Cutoff ${status.cutoff_verified ? "verified" : "unverified"} (${status.shim_cutoffs ?? 0} watchdogs) · Drive writes ${status.drive_writes ?? 0}`
+      : `Cutoff watchdog ${status.cutoff_verified ? "verified" : "ready"} · Drive writes ${status.drive_writes ?? 0}`,
+  ];
+  if (status.live_hardware && typeof status.decoded_frames === "number") {
+    diagParts.push(`Sessions ${status.session_starts ?? 0} · Decoders ${status.decoder_starts ?? 0} · Decoded ${status.decoded_frames}`);
+  }
+  setText(safetyTelemetry, diagParts.join(" · "));
+  if (diagnostics.open && performance.now() >= nextTimingUpdate) {
+    nextTimingUpdate = performance.now() + 1000;
+    const tLabels = {frameAgeMs: "Decoded frame to screen estimate", frameIntervalMs: "Gap between presented frames",
+      serverMs: "Server frame processing",
+      decodeMs: "Browser image read and decode", feedbackMs: "Tap to feedback",
+      acknowledgementMs: "Tap to acknowledgement"};
+    const summary = Object.entries(timingSummary()).map(([key, value]) => value.count
+      ? `${tLabels[key]} ${Math.round(value.p95)} ms p95, ${Math.round(value.max)} ms max (${value.count})`
+      : null).filter(Boolean);
+    setText(document.querySelector("#diagnostic-timing"), [...summary, `Skipped frames ${droppedFrames}`].join(" · "));
+  }
+  motion.hidden = status.state !== "FOLLOWING";
+  setText(motion, !live ? "Motion unknown"
+    : status.motion === "HOLD" ? reasons[status.reason] || "Holding position."
+    : (status.live_hardware ? "" : "Simulated · ") + ({FORWARD: "Moving forward", LEFT: "Turning left",
+      RIGHT: "Turning right"}[status.motion] || status.motion));
+  const followProblem = status.follow_blocker || "";
+  const followUnavailable = status.live_hardware && followProblem === "follow-locked";
+  followStatus.hidden = viewing || !live || Boolean(selection) || !followUnavailable;
+  setText(followStatus, followUnavailable ?
+    "Physical Follow is unavailable. Use Manual drive to move Ori." : "");
+  const defaultHelp = {
+    OFF: status.spotted_box ? "Motion spotted. Tap Lock spotted or select your pet." : "Tap your pet to track.",
+    LOST: status.memory === "searching" ? "Looking for your saved pet. Tap your pet to select it again."
+      : "Tap your pet to select it again.",
+    TRACKING: followUnavailable || videoOnly() ? "The green box shows your selected target."
+      : status.can_teach ? "Set the gap at the distance you want Ori to keep."
+      : "Hold your pet steady in view to set the gap.",
+    READY: followUnavailable || videoOnly() ? "The green box shows your selected target."
+      : reasons[followProblem] || "Gap set. Start Follow when the path is clear.",
+    FOLLOWING: "Pause to keep tracking with the wheels still.",
+  }[status.state];
+  setText(help, selection ? !live ? "Waiting for live video. Your selection is still here."
+    : !status.can_select || busy ? "Confirm is paused until Ori is ready to track."
+    : hint || "Keep your pet inside the box, then confirm."
+    : !live ? "Waiting for a fresh camera picture."
+    : busy ? "Switch to the tab that controls Ori."
+    : hint || (status.reason === "coast-hold" ? reasons["coast-hold"] : defaultHelp) || "");
   buttons.confirm.hidden = buttons.cancel.hidden = !selection;
+  buttons.confirm.disabled = !selection || !canConfirmSelection();
   buttons.track.hidden = !owner || Boolean(selection) || (status.state !== "FOLLOWING" && pending !== "follow");
-  buttons.teach.hidden = !owner || Boolean(selection) || status.state === "FOLLOWING";
-  buttons.follow.hidden = !owner || Boolean(selection) || status.state !== "READY" || (status.dock === "charging");
+  buttons.teach.hidden = !owner || Boolean(selection) || status.state !== "TRACKING" || followUnavailable || videoOnly();
+  buttons.follow.hidden = !owner || Boolean(selection) || status.state !== "READY" || followUnavailable || videoOnly();
   buttons.resume.hidden = Boolean(selection) || status.memory !== "saved";
   buttons.spot.hidden = Boolean(selection) || status.state !== "OFF" || !status.spotted_box;
   buttons.forget.hidden = Boolean(selection) || !status.memory || status.memory === "none";
-  buttons.undock.hidden = !status.live_hardware || status.dock !== "charging" || Boolean(selection);
-  buttons.motors.hidden = !status.live_hardware || Boolean(selection);
-  buttons.motors.textContent = status.follow_enabled ? "Motors: Armed" : "Motors: Locked";
-  buttons.motors.classList.toggle("armed", Boolean(status.follow_enabled));
-  buttons.move.hidden = status.live_hardware || !owner || Boolean(selection) || status.state === "FOLLOWING";
+  buttons.move.hidden = videoOnly() || status.live_hardware || !owner || Boolean(selection) || status.state === "FOLLOWING";
   buttons.teach.disabled = !live || !status.can_teach || Boolean(pending);
-  buttons.follow.disabled = buttons.move.disabled = !live || Boolean(pending);
-  buttons.undock.disabled = buttons.motors.disabled = !live || Boolean(pending);
+  buttons.follow.disabled = !live || Boolean(pending || followProblem);
+  buttons.move.disabled = !live || Boolean(pending);
   buttons.resume.disabled = buttons.spot.disabled = buttons.forget.disabled = !live || Boolean(pending);
-  buttons.home.hidden = !status.can_home || Boolean(selection) || Boolean(status.retracing);
-  buttons.home.disabled = Boolean(busy || pending) || !live;
-  buttons.lift.hidden = status.live_hardware || status.dock !== "charging";
+  buttons.home.hidden = Boolean(selection) || videoOnly();
+  buttons.home.disabled = !status.can_home || Boolean(busy || pending) || !live;
+  buttons.lift.hidden = videoOnly() || status.live_hardware || status.dock !== "charging";
   buttons.lift.disabled = Boolean(pending) || !live;
-  for (const box of policyBoxes) {
-    box.checked = Boolean(status.policy?.[box.dataset.policy]);
-    box.disabled = Boolean(busy);
+  buttons["cutoff-test"].hidden = viewing || videoOnly();
+  buttons["cutoff-test"].disabled = !live || Boolean(pending) || status.dock === "charging" || status.state === "FOLLOWING";
+  buttons.undock.hidden = !status.live_hardware || status.dock !== "charging";
+  buttons.undock.disabled = !live || Boolean(pending) || !manualAvailable();
+
+  allowFollowLabel.hidden = !status.live_hardware || !status.follow_permitted;
+  allowFollowBox.checked = motorsPending ? Boolean(motorsPending.follow_enabled) : Boolean(status.follow_enabled);
+  allowFollowBox.disabled = viewing || Boolean(busy);
+  invertTurnBox.checked = motorsPending ? Boolean(motorsPending.invert_turn) : Boolean(status.invert_turn);
+  const targetSpeed = motorsPending ? motorsPending.forward_speed : acknowledgedSpeed;
+  if (speedSelect.value !== targetSpeed) speedSelect.value = targetSpeed;
+  speedSelect.disabled = invertTurnBox.disabled = viewing || Boolean(busy);
+  toggleEyes.checked = cam.eyes !== false;
+  toggleAvoid.checked = cam.avoid !== false;
+  toggleFall.checked = cam.fall !== false;
+  for (const el of [toggleEyes, toggleAvoid, toggleFall]) {
+    el.closest("label").hidden = !status.live_hardware;
+    el.disabled = viewing || Boolean(busy);
   }
-  if (showDock) {
+
+  const activePolicy = policyTarget || status.policy || {};
+  for (const box of policyBoxes) {
+    box.checked = Boolean(activePolicy[box.dataset.policy]);
+    box.disabled = viewing || Boolean(busy);
+    box.closest("label").hidden = videoOnly() && box.dataset.policy.startsWith("auto_dock_");
+  }
+  if (showDock && live && !busy && !hint && !selection) {
     const dockHelp = {
-      requested: "Waiting for the factory controller.",
+      requested: status.live_hardware ? "Waiting for Ori to reach the base and report charging." : "Waiting for the factory controller.",
       returning: "The factory controller has the wheels.",
       "checking-charge": "Waiting for sustained charging feedback.",
       charging: status.live_hardware
-        ? "On charging dock. Tap or drag any target in view to track it on camera."
+        ? status.can_select ? "Tap your pet to track it while Ori charges."
+          : "Use Manual drive to leave the dock, or enable Base watch to track from the dock."
         : "Lift Ori off the simulated base to start another session.",
       stopping: "Waiting for the controller to report idle.",
       failed: "Clear the approach and place Ori within 2 m in front of the base before retrying.",
-      unknown: "Waiting for fresh factory feedback.",
+      unknown: status.can_select ? "Tap your pet to track. Waiting for Ori to confirm drive readiness."
+        : "Waiting for fresh dock feedback.",
     };
     setText(help, dockHelp[status.dock]);
   }
-  buttons.stop.disabled = Boolean(busy) || viewing;
-  for (const id of ["control-actions", "room-tools", "autonomy"]) {
-    document.getElementById(id).hidden = viewing;
-  }
-  document.querySelector("#drive-pad").hidden = viewing;
+  buttons.stop.hidden = viewing;
+  buttons.stop.disabled = Boolean(busy) || viewing || !status.boot;
+  buttons.brake.disabled = viewing || videoOnly() || !status.boot;
+  document.querySelector("#control-actions").hidden = viewing;
+  document.querySelector("#autonomy").hidden = viewing;
+  document.querySelector("#room-tools").hidden = viewing || videoOnly();
+  drivePad.hidden = viewing || videoOnly();
+  const driveAvailable = manualAvailable();
+  const driveDisabled = String(!driveAvailable);
+  if (joypad.getAttribute("aria-disabled") !== driveDisabled) joypad.setAttribute("aria-disabled", driveDisabled);
+  setText(joyStatus, !live ? "Waiting for live video."
+    : !driveAvailable ? "Drive paused while Ori checks its connection or dock state."
+    : status.manual_mode === "docked" ? "On dock. Hold straight away from the dock, then release to stop."
+    : "Drag the stick or use arrow keys. Release to stop.");
+  if ((!driveAvailable || (undockHolding && status.dock !== "charging")) && manualTimer !== null) stopManual(true);
   document.querySelector("#sharing").hidden = !status.canShare;
   if (viewing) setText(help, "");
   updateCompanion();
-
+  patrol.update();
+  syncToolTabs();
 }
 
-function apply(next) {
+function apply(next, render = true) {
   if (retiredBoots.has(next.boot)) return;
   if (next.boot === status.boot && next.revision < status.revision) return;
   if (status.boot && next.boot !== status.boot) {
     retiredBoots.add(status.boot);
-    selection = null;
+    gesture = startPoint = selection = null;
+    policyTarget = motorsPending = null;
+    cameraPending = {};
     if (presented?.image !== displayed.image) presented?.image.close();
+    displayed.image?.close();
     presented = null;
-    displayed.frame = 0;
-    displayed.box = null;
+    displayed = {frame: 0, imageFrame: 0, image: null, box: null};
+    paint();
     hint = "";
-  }
-  if (selection && (selection.session.boot !== next.boot || selection.session.generation !== next.generation)) {
-    selection = null;
-    startPoint = null;
   }
   const previousBox = displayed.box;
   const previousGeneration = status.generation;
   status = next;
-  if (!selection && displayed.boot === next.boot) {
-    if (next.frame === displayed.imageFrame) displayed.box = next.box ?? null;
+  if (next.control_error === "turn-runaway") hint = reasons["turn-runaway"];
+  if (displayed.boot === next.boot) {
+    if (next.state === "OFF" || next.state === "LOST") displayed.box = null;
+    else if (Array.isArray(next.box)) displayed.box = next.box;
     else if (next.generation !== previousGeneration) displayed.box = null;
   }
-  if (String(previousBox) !== String(displayed.box)) paint();
-  update();
+  if (render) {
+    if (String(previousBox) !== String(displayed.box)) paint();
+    update();
+  }
 }
 
 const transport = document.documentElement.dataset.preview === "pages"
   ? import("./simulator.mjs").then(module => module.createSimulator())
   : Promise.resolve({
-    async frame(previous) {
-      const response = await fetch("/api/frame", {
-        cache: "no-store", headers: {"If-None-Match": previous}, signal: AbortSignal.timeout(2500),
-      });
-      if (response.status === 204) return null;
-      if (!response.ok) throw new Error("Preview unavailable");
+    async frame(previous, statusTag) {
+      if (pageClosing) return null;
+      frameAbort?.abort();
+      const controller = new AbortController();
+      frameAbort = controller;
+      const timer = setTimeout(() => controller.abort(), 1250);
+      let response;
+      try {
+        response = await fetch("/api/frame", {
+          cache: "no-store", headers: {"If-None-Match": previous, "X-Ori-Status-Tag": statusTag ?? ""},
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (response.status === 401 || response.status === 403) throw new Error("Pair Ori again to view the camera");
+      if (!response.ok) throw new Error("Camera connection interrupted");
+      const headers = response.headers;
       return {
-        tag: response.headers.get("ETag") || "",
-        frame: Number(response.headers.get("X-Frame-Id")),
-        age: Number(response.headers.get("X-Ori-Frame-Age-Ms")),
-        status: {...JSON.parse(response.headers.get("X-Ori-Status")),
-          role: response.headers.get("X-Ori-Role"), canShare: response.headers.get("X-Ori-Can-Share") === "1"},
-        image: async () => createImageBitmap(await response.blob()),
-        discard: () => response.body.cancel(),
+        tag: headers.get("ETag"),
+        statusTag: headers.get("X-Ori-Status-Tag"),
+        frame: Number(headers.get("X-Frame-Id")),
+        age: Number(headers.get("X-Ori-Frame-Age-Ms")),
+        processingMs: Number(headers.get("X-Ori-Frame-Processing-Ms")),
+        status: {...JSON.parse(headers.get("X-Ori-Status")),
+          role: headers.get("X-Ori-Role"), canShare: headers.get("X-Ori-Can-Share") === "1"},
+        image: response.status === 200 ? async () => createImageBitmap(await response.blob()) : null,
+        discard: () => response.body?.cancel(),
       };
     },
     async control(action, payload) {
       const response = await fetch("/api/" + action, {
         signal: AbortSignal.timeout(2000),
+        keepalive: action === "stop" || (action === "manual" && !payload.ly && !payload.rx),
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload),
@@ -376,69 +921,98 @@ async function post(action, fields = {}, session = status) {
     driver, boot: session.boot, generation: session.generation, ...fields,
   });
   apply({...result, role: status.role, canShare: status.canShare});
-  return result.accepted;
+  return result;
+}
+
+function afterPaint() {
+  return new Promise(resolve => {
+    const raf = requestAnimationFrame(() => {
+      clearTimeout(timeout);
+      resolve(true);
+    });
+    const timeout = setTimeout(() => {
+      cancelAnimationFrame(raf);
+      resolve(true);
+    }, 50);
+  });
 }
 
 async function refresh() {
+  if (pageClosing) return;
   if (document.hidden) {
     setTimeout(refresh, 200);
     return;
   }
+  const epoch = previewEpoch;
   try {
-    const preview = await (await transport).frame(lastTag);
-    if (!preview) return;
-    lastTag = preview.tag;
+    const preview = await (await transport).frame(lastTag, lastStatusTag);
+    const arrived = performance.now();
+    if (!preview || pageClosing) return;
     const {frame, status: next} = preview;
-    if (retiredBoots.has(next.boot)) {
+    if (epoch !== previewEpoch || document.hidden || retiredBoots.has(next.boot)) {
       await preview.discard();
       return;
     }
-    if (status.boot && next.boot !== status.boot) apply(next);
-    if (selection && (frame - selection.frame >= 20 || performance.now() >= selection.deadline)) {
-      selection = null;
-      startPoint = null;
-      hint = "Selection expired. Tap the live picture to try again.";
-    }
-    if (frame !== displayed.imageFrame || displayed.boot !== next.boot) {
-      if (selection) {
-        await preview.discard();
-        apply(next);
-        return;
-      }
-      const decodeStarted = performance.now();
-      const image = await preview.image();
-      uiTimings.decodeMs = performance.now() - decodeStarted;
-      if (!selection && !document.hidden && !retiredBoots.has(next.boot)) {
-        // Acknowledge after a rendering opportunity, using the painted frame ID.
-        const previous = displayed.image;
-        lastNewImage = performance.now();
-        displayed.boot = next.boot;
-        displayed.image = image;
-        displayed.imageFrame = frame;
-        displayed.box = next.generation >= status.generation ? next.box : null;
-        paint();
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          if (!selection && !document.hidden && displayed.image === image) {
-            if (presented?.image !== image) presented?.image.close();
-            displayed.frame = frame;
-            presented = {...displayed};
-            uiTimings.frameAgeMs = (preview.age ?? 0) + performance.now() - decodeStarted;
-          }
-        }));
-        if (previous !== presented?.image) previous?.close();
-      } else {
-        image.close();
-      }
-    } else {
-      await preview.discard();
-    }
+    lastStatusTag = preview.statusTag ?? lastStatusTag;
+    if (preview.tag !== null) lastTag = preview.tag;
+    refreshFailures = 0;
     fatal = "";
-    apply(next);
-  } catch {
-    fatal = "Preview unavailable";
+    if (status.boot && next.boot !== status.boot) apply(next);
+    if (!preview.image || (displayed.imageFrame === frame && displayed.boot === next.boot)) {
+      await preview.discard();
+      apply(next);
+      return;
+    }
+
+    const image = await preview.image();
+    sample("decodeMs", performance.now() - arrived);
+    if (epoch !== previewEpoch || document.hidden || retiredBoots.has(next.boot)) {
+      image.close();
+      return;
+    }
+
+    const previous = displayed.image;
+    displayed = {frame, image, imageFrame: frame,
+      boot: next.boot, receivedAt: arrived - (preview.age ?? 0), box: null};
+    if (Array.isArray(next.box) && next.state !== "OFF" && next.state !== "LOST") displayed.box = next.box;
+    apply(next, false);
+    paint();
     update();
+    if (previous !== presented?.image) previous?.close();
+
+    if (await afterPaint() && epoch === previewEpoch && !document.hidden &&
+        displayed.image === image && displayed.boot === status.boot) {
+      if (presented?.boot === next.boot && presented.presentedAt !== undefined) {
+        droppedFrames += Math.max(0, frame - presented.frame - 1);
+        sample("frameIntervalMs", performance.now() - presented.presentedAt);
+      }
+      if (presented?.image !== image) presented?.image.close();
+      displayed.frame = frame;
+      presented = {...displayed, presentedAt: performance.now()};
+      sample("frameAgeMs", performance.now() - presented.receivedAt);
+      sample("serverMs", preview.processingMs);
+      update();
+    }
+  } catch (error) {
+    if (!pageClosing && epoch === previewEpoch) {
+      ++refreshFailures;
+      fatal = error.message?.startsWith("Pair Ori") ? error.message : "Camera connection interrupted";
+      if (fatal.startsWith("Pair Ori")) {
+        if (presented?.image !== displayed.image) presented?.image.close();
+        displayed.image?.close();
+        presented = null;
+        displayed = {frame: 0, imageFrame: 0, image: null, box: null};
+        selection = startPoint = null;
+        lastTag = "";
+        paint();
+      }
+      update();
+    }
   } finally {
-    setTimeout(refresh, fatal ? 180 : 0);
+    if (!pageClosing) {
+      const retryDelay = !fatal ? 0 : refreshFailures === 1 ? 0 : Math.min(2000, 250 * 2 ** (refreshFailures - 2));
+      setTimeout(refresh, retryDelay);
+    }
   }
 }
 
@@ -451,89 +1025,209 @@ function point(event) {
 }
 
 function clampBox(x, y, width, height) {
-  const w = Math.min(318, Math.max(12, Math.round(width)));
-  const h = Math.min(178, Math.max(12, Math.round(height)));
+  const w = Math.min(318, Math.max(16, Math.round(width)));
+  const h = Math.min(178, Math.max(16, Math.round(height)));
   const bx = Math.min(319 - w, Math.max(1, Math.round(x)));
   const by = Math.min(179 - h, Math.max(1, Math.round(y)));
   return [bx, by, w, h];
 }
 
 function canBeginSelection() {
-  const baseWatchOk = Boolean(status.policy?.base_watch && status.dock === "charging");
-  return status.role !== "viewer" && !pending && (Boolean(selection) || previewIsLive()) &&
-    presented && presented.boot === status.boot && !(status.owner && status.owner !== driver && !status.autonomous) &&
-    status.state !== "FOLLOWING" && (status.dock === "idle" || status.can_home || baseWatchOk);
+  return status.role !== "viewer" && !pending && previewIsLive() &&
+    (!status.owner || status.owner === driver || status.owner === automaticOwner) &&
+    (!status.dock_owner || status.dock_owner === driver || status.dock_owner === automaticOwner);
+}
+
+function canConfirmSelection() {
+  return !gesture && canBeginSelection() && status.can_select;
+}
+
+function hitSelectionHandle(pt, box) {
+  const [bx, by, bw, bh] = box;
+  const r = Math.min(12, Math.max(5, Math.min(bw, bh) * 0.35));
+  const corners = [
+    [bx, by, [bx + bw, by + bh]],
+    [bx + bw, by, [bx, by + bh]],
+    [bx, by + bh, [bx + bw, by]],
+    [bx + bw, by + bh, [bx, by]],
+  ];
+  let best = null;
+  let bestDist = Infinity;
+  for (const [cx, cy, anchor] of corners) {
+    const d = Math.hypot(pt[0] - cx, pt[1] - cy);
+    if (d <= r && d < bestDist) {
+      bestDist = d;
+      best = {type: "resize", anchor};
+    }
+  }
+  if (best) return best;
+  if (pt[0] >= bx && pt[0] <= bx + bw && pt[1] >= by && pt[1] <= by + bh) {
+    return {type: "move", offset: [pt[0] - bx, pt[1] - by], size: [bw, bh]};
+  }
+  return null;
+}
+
+function resizeFromAnchor(anchor, pt) {
+  const [ax, ay] = anchor;
+  let w = Math.max(16, Math.round(Math.abs(pt[0] - ax)));
+  let x = pt[0] < ax ? ax - w : ax;
+  if (x < 1) { x = 1; w = Math.max(16, ax - 1); }
+  if (x + w > 319) { w = Math.max(16, 319 - x); if (x + w > 319) x = 319 - w; }
+  let h = Math.max(16, Math.round(Math.abs(pt[1] - ay)));
+  let y = pt[1] < ay ? ay - h : ay;
+  if (y < 1) { y = 1; h = Math.max(16, ay - 1); }
+  if (y + h > 179) { h = Math.max(16, 179 - y); if (y + h > 179) y = 179 - h; }
+  return [x, y, w, h];
+}
+
+async function submitQuickTap(tapFrame, box44) {
+  const box = box44.map((value, index) => value / (index % 2 ? 180 : 320));
+  const accepted = await command("select", {frame: tapFrame, box});
+  if (!accepted && !selection && (status.state === "OFF" || status.state === "LOST") && status.role !== "viewer") {
+    selection = {
+      box: box44,
+      frame: presented?.frame || 0,
+      at: performance.now(),
+      expired: status.reason === "selection-expired",
+    };
+    paint();
+    update();
+  }
 }
 
 canvas.addEventListener("pointerdown", event => {
   if (!event.isPrimary || event.button !== 0 || !canBeginSelection()) return;
-  // An image drawn since the last rendering opportunity may still be pending.
-  if (displayed.image !== presented.image) {
-    displayed.image?.close();
-    displayed = {...presented};
+  const pt = point(event);
+  const hit = selection ? hitSelectionHandle(pt, selection.box) : null;
+  if (hit) {
+    gesture = {
+      mode: hit.type,
+      pointerId: event.pointerId,
+      anchor: hit.anchor,
+      offset: hit.offset,
+      size: hit.size,
+      startClient: [event.clientX, event.clientY],
+      startPt: pt,
+      at: performance.now(),
+    };
+    startPoint = pt;
+    selection.expired = false;
+    hint = "";
+  } else {
+    gesture = {
+      mode: "pending",
+      pointerId: event.pointerId,
+      startClient: [event.clientX, event.clientY],
+      startPt: pt,
+      tapFrame: presented?.frame || 0,
+      at: performance.now(),
+    };
+    startPoint = pt;
   }
-  dragging = Boolean(selection);
-  startPoint = point(event);
-  const tapSize = status.live_hardware ? 56 : 80;
-  selection = {
-    frame: displayed.imageFrame,
-    session: status,
-    deadline: selection?.deadline ?? performance.now() + 2000,
-    box: clampBox(startPoint[0] - tapSize / 2, startPoint[1] - tapSize / 2, tapSize, tapSize),
-  };
-  hint = "";
   canvas.setPointerCapture(event.pointerId);
   paint();
   update();
 });
 
 canvas.addEventListener("pointermove", event => {
-  if (!event.isPrimary || !startPoint || !selection) return;
-  const end = point(event);
-  const width = Math.abs(end[0] - startPoint[0]);
-  const height = Math.abs(end[1] - startPoint[1]);
-  if (width < 12 || height < 12) return;
-  dragging = true;
-  selection.box = clampBox(Math.min(end[0], startPoint[0]), Math.min(end[1], startPoint[1]), width, height);
-  paint();
+  if (!event.isPrimary || !gesture || event.pointerId !== gesture.pointerId) return;
+  const pt = point(event);
+  if (gesture.mode === "move" && selection) {
+    const [bw, bh] = gesture.size;
+    const bx = Math.min(319 - bw, Math.max(1, Math.round(pt[0] - gesture.offset[0])));
+    const by = Math.min(179 - bh, Math.max(1, Math.round(pt[1] - gesture.offset[1])));
+    selection.box = [bx, by, bw, bh];
+    if (presented?.frame) {
+      selection.frame = presented.frame;
+      selection.at = performance.now();
+    }
+    selection.expired = false;
+    paint();
+    return;
+  }
+  if (gesture.mode === "resize" && selection) {
+    selection.box = resizeFromAnchor(gesture.anchor, pt);
+    if (presented?.frame) {
+      selection.frame = presented.frame;
+      selection.at = performance.now();
+    }
+    selection.expired = false;
+    paint();
+    return;
+  }
+  if (gesture.mode === "pending") {
+    const travel = Math.hypot(event.clientX - gesture.startClient[0], event.clientY - gesture.startClient[1]);
+    if (travel < 8) return;
+    gesture.mode = "draw";
+    hint = "";
+    selection = {
+      box: clampBox(Math.min(gesture.startPt[0], pt[0]), Math.min(gesture.startPt[1], pt[1]),
+        Math.abs(pt[0] - gesture.startPt[0]), Math.abs(pt[1] - gesture.startPt[1])),
+      frame: presented?.frame || gesture.tapFrame || 0,
+      at: performance.now(),
+      expired: false,
+    };
+    paint();
+    update();
+    return;
+  }
+  if (gesture.mode === "draw" && selection) {
+    selection.box = clampBox(Math.min(gesture.startPt[0], pt[0]), Math.min(gesture.startPt[1], pt[1]),
+      Math.abs(pt[0] - gesture.startPt[0]), Math.abs(pt[1] - gesture.startPt[1]));
+    if (presented?.frame) {
+      selection.frame = presented.frame;
+      selection.at = performance.now();
+    }
+    selection.expired = false;
+    paint();
+  }
 });
+
 canvas.addEventListener("pointerup", event => {
-  if (!event.isPrimary || !startPoint) return;
-  startPoint = null;
-  if (selection && !dragging) confirmSelection();
-});
-canvas.addEventListener("pointercancel", event => {
-  if (!event.isPrimary) return;
-  startPoint = selection = null;
-  update();
+  if (!event.isPrimary || !gesture || event.pointerId !== gesture.pointerId) return;
+  const g = gesture;
+  gesture = startPoint = null;
+  if (g.mode === "pending") {
+    const elapsed = performance.now() - g.at;
+    const box44 = clampBox(g.startPt[0] - 22, g.startPt[1] - 22, 44, 44);
+    const tapFrame = g.tapFrame || presented?.frame || 0;
+    if (elapsed < 300 && status.can_select && tapFrame > 0) {
+      selection = null;
+      paint();
+      update();
+      submitQuickTap(tapFrame, box44);
+      return;
+    }
+    selection = {box: box44, frame: tapFrame, at: performance.now(), expired: false};
+    hint = "";
+  }
   paint();
+  update();
 });
+
+for (const type of ["pointercancel", "lostpointercapture"]) {
+  canvas.addEventListener(type, event => {
+    if (!event.isPrimary || !gesture || event.pointerId !== gesture.pointerId) return;
+    gesture = startPoint = null;
+    update();
+  });
+}
+
 canvas.addEventListener("keydown", event => {
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
+  if (event.repeat || !canBeginSelection()) return;
   if (selection) {
     confirmSelection();
-    return;
+  } else {
+    selection = {box: clampBox(120, 65, 80, 80), frame: presented?.frame || 0, at: performance.now(), expired: false};
+    hint = "";
+    paint();
+    update();
   }
-  if (!canBeginSelection()) return;
-  if (displayed.image !== presented.image) {
-    displayed.image?.close();
-    displayed = {...presented};
-  }
-  selection = {
-    frame: displayed.imageFrame,
-    session: status,
-    deadline: performance.now() + 2000,
-    box: clampBox(120, 65, 80, 80),
-  };
-  confirmSelection();
 });
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && selection) {
-    startPoint = selection = null;
-    update();
-    paint();
-  }
+  if (event.key === "Escape" && selection) cancelSelection();
 });
 
 async function command(action, fields = {}, session = status) {
@@ -542,54 +1236,229 @@ async function command(action, fields = {}, session = status) {
   const currentIntent = ++intent;
   const started = performance.now();
   pending = action;
-  update();
-  requestAnimationFrame(() => { uiTimings.feedbackMs = performance.now() - started; });
   hint = "";
+  update();
+  if (action === "stop") paint();
+  requestAnimationFrame(() => sample("feedbackMs", performance.now() - started));
   try {
-    if (action === "follow" && displayed.frame) {
-      if (!await post("heartbeat", {frame: displayed.frame}, session)) throw new Error("Preview expired");
+    if (action === "follow") {
+      if (!previewIsLive()) throw new Error("Wait for live video and try again.");
+      fields = {frame: presented.frame};
     }
-    if (intent !== currentIntent) return;
-    const accepted = await post(action, fields, session);
-    uiTimings.acknowledgementMs = performance.now() - started;
-    if (!accepted) {
+    const result = await post(action, fields, session);
+    sample("acknowledgementMs", performance.now() - started);
+    if (!result.accepted) {
       if (intent !== currentIntent) return;
-      hint = action === "teach" ? "Hold the target steady and try again."
+      const problem = result.control_error || (action === "follow" ? result.follow_blocker : result.reason);
+      hint = reasons[problem] || (action === "teach" ? "Hold the target steady and try again."
         : action === "select" ? "Select a fresh frame and try again."
-        : "Action unavailable. Check the preview and current state.";
+        : "Action unavailable. Check the preview and current state.");
     }
+    return result.accepted && intent === currentIntent;
   } catch (error) {
     if (intent !== currentIntent) return;
     hint = error.message || "Control connection unavailable";
   } finally {
     if (intent === currentIntent) pending = "";
+    paint();
     update();
   }
 }
 
-function confirmSelection() {
-  if (!selection) return;
-  const {frame, box, session} = selection;
-  selection = null;
-  command("select", {frame, box: box.map((value, index) => value / (index % 2 ? 180 : 320))}, session);
+async function confirmSelection() {
+  if (!selection || !canConfirmSelection()) return;
+  const draft = selection;
+  const box = draft.box.map((value, index) => value / (index % 2 ? 180 : 320));
+  const usePresented = Boolean(draft.expired || !draft.frame || performance.now() - draft.at >= 1500);
+  draft.expired = false;
+  const frame = usePresented ? presented.frame : draft.frame;
+  if (await command("select", {frame, box})) {
+    if (selection === draft) cancelSelection();
+  } else if (selection === draft) {
+    draft.expired = true;
+    draft.frame = 0;
+    paint();
+    update();
+  }
 }
+
+function cancelSelection() {
+  gesture = startPoint = selection = null;
+  hint = "";
+  paint();
+  update();
+}
+
 buttons.confirm.onclick = confirmSelection;
-buttons.cancel.onclick = () => { selection = null; update(); paint(); };
-buttons.stop.onclick = () => { stopManual(); selection = null; command("stop"); };
-for (const action of ["track", "teach", "follow", "move", "home", "lift", "resume", "spot", "forget"]) {
+buttons.cancel.onclick = cancelSelection;
+buttons.stop.onclick = () => {
+  stopManual();
+  patrol.stop();
+  cancelSelection();
+  command("stop");
+};
+for (const action of ["track", "teach", "follow", "move", "home", "lift", "resume", "spot", "forget", "cutoff-test"]) {
   buttons[action].onclick = () => command(action);
 }
-function syncMotorSettings(enabled = Boolean(status.follow_enabled)) {
-  const s = Number(speedSelect.value);
-  command("motors", {enabled, forward_speed: s, turn_speed: s * 0.75, invert_turn: invertTurnBox.checked});
+let manualTimer = null;
+let manualPointer = null;
+let undockPointer = null;
+let undockHolding = false;
+let undockLatched = false;
+let undockCapTimer = null;
+let manualAxes = {ly: 0, rx: 0};
+let manualSequence = Date.now() * 1000;
+let manualInFlight = false;
+const keysDown = new Set();
+
+function beginUndockHold(pointerId = null) {
+  if (undockHolding || undockLatched || status.dock !== "charging" || !manualAvailable()) return false;
+  stopManual();
+  undockHolding = true;
+  undockPointer = pointerId;
+  startManual(1, 0);
+  clearTimeout(undockCapTimer);
+  undockCapTimer = setTimeout(() => {
+    if (undockHolding) {
+      undockLatched = true;
+      stopManual(true);
+    }
+  }, 1400);
+  return true;
 }
-for (const [id, mode] of [["create-share", "create"], ["revoke-share", "revoke"]]) {
+
+function endUndockHold(releaseLatch = true) {
+  if (releaseLatch) undockLatched = false;
+  if (undockHolding) stopManual(true);
+}
+
+buttons.undock.addEventListener("pointerdown", event => {
+  if (!event.isPrimary || event.button !== 0) return;
+  event.preventDefault();
+  if (beginUndockHold(event.pointerId)) {
+    buttons.undock.setPointerCapture(event.pointerId);
+  }
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  buttons.undock.addEventListener(type, event => {
+    if (undockPointer === null || event.pointerId === undockPointer) {
+      undockPointer = null;
+      endUndockHold(true);
+    }
+  });
+}
+buttons.undock.addEventListener("lostpointercapture", event => {
+  if (undockPointer === null || event.pointerId === undockPointer) {
+    endUndockHold(false);
+  }
+});
+buttons.undock.addEventListener("keydown", event => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  if (!event.repeat) beginUndockHold();
+});
+buttons.undock.addEventListener("keyup", event => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  endUndockHold(true);
+});
+function queueCameraChange(patch) {
+  if (status.role === "viewer" || !status.boot) return;
+  Object.assign(cameraPending, patch);
+  ++cameraInFlight;
+  hint = "";
+  update();
+  const body = {...patch};
+  cameraQueue = cameraQueue.then(async () => {
+    try {
+      const result = await post("camera", body);
+      if (!result.accepted) {
+        for (const k of Object.keys(body)) delete cameraPending[k];
+        const problem = result.control_error || result.reason;
+        hint = reasons[problem] || "Could not update camera setting.";
+      } else {
+        for (const k of Object.keys(body)) {
+          if (cameraPending[k] === body[k]) delete cameraPending[k];
+        }
+      }
+    } catch (error) {
+      for (const k of Object.keys(body)) delete cameraPending[k];
+      hint = error.message || "Control connection unavailable";
+    } finally {
+      --cameraInFlight;
+      if (cameraInFlight === 0) cameraPending = {};
+      update();
+    }
+  });
+}
+
+function syncMotorSettings() {
+  if (status.role === "viewer" || !status.boot) return;
+  const speed = Number(speedSelect.value);
+  const patch = {
+    enabled: status.live_hardware ? allowFollowBox.checked : Boolean(status.follow_enabled),
+    forward_speed: speed,
+    turn_speed: Number((speed * 0.75).toFixed(3)),
+    invert_turn: invertTurnBox.checked,
+  };
+  motorsPending = {
+    follow_enabled: patch.enabled,
+    forward_speed: speedSelect.value,
+    invert_turn: patch.invert_turn,
+  };
+  ++motorsInFlight;
+  hint = "";
+  update();
+  motorsQueue = motorsQueue.then(async () => {
+    try {
+      const result = await post("motors", patch);
+      if (!result.accepted) {
+        motorsPending = null;
+        const problem = result.control_error || result.reason;
+        hint = reasons[problem] || "Could not update drive setting.";
+      } else {
+        acknowledgedSpeed = String(Number(patch.forward_speed).toFixed(2));
+      }
+    } catch (error) {
+      motorsPending = null;
+      hint = error.message || "Control connection unavailable";
+    } finally {
+      --motorsInFlight;
+      if (motorsInFlight === 0) motorsPending = null;
+      update();
+    }
+  });
+}
+
+colorButton.onclick = () => {
+  const next = (cameraPending.color_mode ?? status.camera?.color_mode) === "bw" ? "color" : "bw";
+  queueCameraChange({color_mode: next});
+};
+nightSelect.onchange = () => {
+  queueCameraChange({night_mode: nightSelect.value});
+};
+irTintSelect.onchange = () => {
+  queueCameraChange({ir_tint: irTintSelect.value});
+};
+themeToggle.onclick = () => {
+  uiNightTheme = !uiNightTheme;
+  try { localStorage.setItem(THEME_STORAGE_KEY, uiNightTheme ? "night" : "day"); } catch {}
+  applyTheme(uiNightTheme);
+  paint();
+  patrol.update();
+};
+toggleEyes.onchange = () => queueCameraChange({eyes: toggleEyes.checked});
+toggleAvoid.onchange = () => queueCameraChange({avoid: toggleAvoid.checked});
+toggleFall.onchange = () => queueCameraChange({fall: toggleFall.checked});
+allowFollowBox.onchange = syncMotorSettings;
+
+for (const [id, shareMode] of [["create-share", "create"], ["revoke-share", "revoke"]]) {
   document.getElementById(id).onclick = async () => {
     const text = document.querySelector("#share-text");
     const link = document.querySelector("#share-link");
     try {
       const response = await fetch("./api/share-view", {method: "POST",
-        headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode})});
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode: shareMode})});
       if (!response.ok) throw new Error("Could not update viewing access.");
       const {url} = await response.json();
       link.value = url ? new URL(url, location.href).href : "";
@@ -601,58 +1470,105 @@ for (const [id, mode] of [["create-share", "create"], ["revoke-share", "revoke"]
     }
   };
 }
-buttons.motors.onclick = () => syncMotorSettings(!status.follow_enabled);
-speedSelect.onchange = () => { if (status.live_hardware) syncMotorSettings(); };
-invertTurnBox.onchange = () => { if (status.live_hardware) syncMotorSettings(); };
+speedSelect.onchange = () => syncMotorSettings();
+invertTurnBox.onchange = () => syncMotorSettings();
 
-let manualTimer = null;
-let manualAxes = {ly: 0, rx: 0};
-const keysDown = new Set();
-
-function sendManual(ly, rx, ttl = 280) {
-  if (status.role === "viewer") return;
-  post("manual", {ly, rx, ttl}).catch(() => {});
+function manualAvailable() {
+  return Boolean(drivePad.open && status.boot && previewIsLive() && !selection && pending !== "stop" && !videoOnly() &&
+    status.role !== "viewer" && (!status.owner || status.owner === driver || status.owner === automaticOwner) &&
+    (!status.live_hardware || status.manual_mode === "drive" || status.manual_mode === "docked"));
 }
-function startManual(ly, rx) {
-  manualAxes = {ly, rx};
-  clearInterval(manualTimer);
-  if (!ly && !rx) {
-    sendManual(0, 0);
+
+function sendManual(ly, rx) {
+  if (status.role === "viewer" || !status.boot) return;
+  const moving = Boolean(ly || rx);
+  if (moving) {
+    if (!manualAvailable()) return;
+    patrol.recordLeg(ly, rx);
+    if (manualInFlight) return;
+    manualInFlight = true;
+  }
+  const sequence = ++manualSequence;
+  post("manual", {ly, rx, ttl: 250, sequence}).then(result => {
+    if (moving && !result.accepted && manualTimer !== null) stopManual();
+  }).catch(() => {
+    if (moving && manualTimer !== null) stopManual();
+  }).finally(() => {
+    if (moving) manualInFlight = false;
+  });
+}
+
+function startManual(forward, turn) {
+  const speed = Number(speedSelect.value);
+  manualAxes = {ly: forward * speed, rx: turn * Math.min(speed * 0.65, 0.28) * (invertTurnBox.checked ? -1 : 1)};
+  if (!forward && !turn) {
+    if (manualTimer !== null) sendManual(0, 0);
+    clearInterval(manualTimer);
+    manualTimer = null;
     return;
   }
-  sendManual(ly, rx);
-  manualTimer = setInterval(() => sendManual(manualAxes.ly, manualAxes.rx), 120);
+  if (manualTimer !== null) return;
+  sendManual(manualAxes.ly, manualAxes.rx);
+  manualTimer = setInterval(() => sendManual(manualAxes.ly, manualAxes.rx), 75);
 }
-function stopManual() {
+
+function drawStick(x, y) {
+  const travel = joypad.clientWidth * 0.26;
+  joypad.style.setProperty("--stick-x", `${x * travel}px`);
+  joypad.style.setProperty("--stick-y", `${y * travel}px`);
+}
+
+function stopManual(force = false) {
+  const wasDriving = manualTimer !== null || undockHolding;
+  const pointer = manualPointer;
+  manualPointer = null;
+  if (pointer !== null && joypad.hasPointerCapture(pointer)) joypad.releasePointerCapture(pointer);
+  if (!undockLatched) {
+    if (undockPointer !== null && buttons.undock.hasPointerCapture(undockPointer)) {
+      buttons.undock.releasePointerCapture(undockPointer);
+    }
+    undockPointer = null;
+  }
+  undockHolding = false;
+  clearTimeout(undockCapTimer);
+  undockCapTimer = null;
   keysDown.clear();
   clearInterval(manualTimer);
   manualTimer = null;
-  if (manualAxes.ly || manualAxes.rx) {
-    manualAxes = {ly: 0, rx: 0};
-    sendManual(0, 0);
-  }
+  manualAxes = {ly: 0, rx: 0};
+  drawStick(0, 0);
+  patrol.endLeg?.();
+  if (wasDriving || force) sendManual(0, 0);
 }
-for (const btn of dpadButtons) {
-  const go = event => {
-    event.preventDefault();
-    const s = Number(speedSelect.value);
-    btn.setPointerCapture?.(event.pointerId);
-    startManual(Number(btn.dataset.ly) * s, Number(btn.dataset.rx) * s * 0.85);
-  };
-  btn.addEventListener("pointerdown", go);
-  for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) {
-    btn.addEventListener(ev, stopManual);
-  }
+
+function moveStick(event) {
+  if (event.pointerId !== manualPointer) return;
+  const bounds = joypad.getBoundingClientRect();
+  let x = (event.clientX - bounds.left - bounds.width / 2) / (bounds.width * 0.38);
+  let y = (event.clientY - bounds.top - bounds.height / 2) / (bounds.height * 0.38);
+  if (status.manual_mode === "docked") x = 0;
+  const magnitude = Math.hypot(x, y);
+  if (magnitude < 0.18) x = y = 0;
+  else if (magnitude > 1) { x /= magnitude; y /= magnitude; }
+  drawStick(x, y);
+  startManual(-y, x);
 }
-buttons.brake.onclick = stopManual;
-buttons.undock.onclick = async () => {
+
+joypad.addEventListener("pointerdown", event => {
+  if (!event.isPrimary || event.button !== 0 || manualPointer !== null || !manualAvailable()) return;
+  event.preventDefault();
   stopManual();
-  for (let i = 0; i < 5; i++) {
-    await post("manual", {ly: 0.42, rx: 0, ttl: 200});
-    await new Promise(r => setTimeout(r, 140));
-  }
-  await post("manual", {ly: 0, rx: 0, ttl: 200});
-};
+  manualPointer = event.pointerId;
+  joypad.setPointerCapture(event.pointerId);
+  moveStick(event);
+});
+joypad.addEventListener("pointermove", moveStick);
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
+  joypad.addEventListener(type, event => {
+    if (event.pointerId === manualPointer) stopManual(true);
+  });
+}
+buttons.brake.onclick = () => stopManual(true);
 const keyAxes = {
   KeyW: [1, 0], ArrowUp: [1, 0],
   KeyS: [-1, 0], ArrowDown: [-1, 0],
@@ -665,11 +1581,13 @@ function syncKeys() {
     ly += keyAxes[code][0];
     rx += keyAxes[code][1];
   }
-  const s = Number(speedSelect.value);
-  startManual(Math.sign(ly) * s, Math.sign(rx) * s * 0.85);
+  const turn = status.manual_mode === "docked" ? 0 : Math.sign(rx);
+  drawStick(turn, -Math.sign(ly));
+  startManual(Math.sign(ly), turn);
 }
 document.addEventListener("keydown", event => {
-  if (!(event.code in keyAxes) || event.repeat || selection || document.activeElement?.tagName === "SELECT") return;
+  if (!(event.code in keyAxes) || event.repeat || manualPointer !== null || !manualAvailable() ||
+      document.activeElement?.matches("select, input, textarea, [contenteditable]")) return;
   event.preventDefault();
   keysDown.add(event.code);
   syncKeys();
@@ -678,32 +1596,130 @@ document.addEventListener("keyup", event => {
   if (!keysDown.delete(event.code)) return;
   syncKeys();
 });
-window.addEventListener("blur", stopManual);
-
-for (const box of policyBoxes) {
-  box.onchange = () => {
-    const policy = Object.fromEntries(policyBoxes.map(b => [b.dataset.policy, b.checked]));
-    command("policy", {policy});
+window.addEventListener("blur", () => stopManual());
+window.addEventListener("beforeunload", () => {
+  pageClosing = true;
+  frameAbort?.abort();
+  stopManual();
+});
+window.addEventListener("pagehide", () => {
+  pageClosing = true;
+  frameAbort?.abort();
+  stopManual();
+});
+window.addEventListener("pageshow", event => {
+  if (event.persisted) pageClosing = false;
+});
+for (const {tab, panel} of toolTabs) {
+  tab.onclick = () => {
+    if (panel.hidden) return;
+    syncingTabs = true;
+    const nextOpen = !panel.open;
+    for (const other of toolTabs) {
+      if (other.panel !== panel && other.panel.open) other.panel.open = false;
+    }
+    panel.open = nextOpen;
+    syncingTabs = false;
+    if (panel === diagnostics && diagnostics.open) nextTimingUpdate = 0;
+    if (!drivePad.open) stopManual();
+    syncToolTabs();
+    tab.focus();
+    update();
   };
+  panel.addEventListener("toggle", () => {
+    if (syncingTabs) return;
+    if (panel.open) {
+      syncingTabs = true;
+      for (const other of toolTabs) {
+        if (other.panel !== panel && other.panel.open) other.panel.open = false;
+      }
+      syncingTabs = false;
+    }
+    if (panel === diagnostics && diagnostics.open) nextTimingUpdate = 0;
+    if (!drivePad.open) stopManual();
+    syncToolTabs();
+    update();
+  });
 }
 
+function queuePolicyChange(key, checked) {
+  if (status.role === "viewer" || !status.boot) return;
+  const base = policyTarget ? {...policyTarget} : {...(status.policy || {})};
+  base[key] = checked;
+  policyTarget = base;
+  ++policyInFlight;
+  hint = "";
+  update();
+  const snapshot = {...base};
+  policyQueue = policyQueue.then(async () => {
+    try {
+      const result = await post("policy", {policy: snapshot});
+      if (!result.accepted) {
+        policyTarget = null;
+        const problem = result.control_error || result.reason;
+        hint = reasons[problem] || "Could not update automation setting.";
+      }
+    } catch (error) {
+      policyTarget = null;
+      hint = error.message || "Control connection unavailable";
+    } finally {
+      --policyInFlight;
+      if (policyInFlight === 0) policyTarget = null;
+      update();
+    }
+  });
+}
+
+for (const box of policyBoxes) {
+  box.onchange = () => queuePolicyChange(box.dataset.policy, box.checked);
+}
+
+window.addEventListener("resize", () => {
+  paint();
+  updateCompanion();
+  patrol.update();
+});
+
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    displayed.frame = 0;
-    stopManual();
-  }
+  ++previewEpoch;
+  displayed.frame = 0;
+  lastTag = "";
+  startPoint = null;
+  stopManual();
+  update();
 });
 
 setInterval(() => {
   update();
   const activeState = status.state !== "OFF" && status.state !== "LOST";
-  if (status.role !== "viewer" && !document.hidden && displayed.frame && activeState && (status.owner === driver || (status.autonomous && status.owner))) {
-    post("heartbeat", {frame: displayed.frame}).catch(() => {});
+  const ackFrame = presented?.frame || 0;
+  if (!heartbeatPending && pending !== "stop" && status.role !== "viewer" && ackFrame > 0 && previewIsLive() &&
+      activeState && status.owner === driver) {
+    heartbeatPending = true;
+    post("heartbeat", {frame: ackFrame}).catch(() => {}).finally(() => { heartbeatPending = false; });
   }
-}, 250);
+}, 200);
+
+const patrol = addPatrol(() => ({
+  mode: status.source_mode,
+  boot: status.boot,
+  live: previewIsLive(),
+  viewer: status.role === "viewer",
+  image: presented?.image,
+  frame: presented?.frame,
+  patrol: status.patrol,
+  moving: Boolean(status.manual_active || manualTimer !== null || status.state === "FOLLOWING"),
+  patrolReady: !pending && !selection && status.state !== "FOLLOWING" &&
+    (!status.owner || status.owner === driver || status.owner === automaticOwner) &&
+    (status.source_mode === "robot"
+      ? (status.manual_mode === "drive" || status.manual_mode === "docked")
+      : (status.dock === "idle" || status.dock === "charging")),
+  ready: !pending && !selection && (!status.owner || status.owner === driver || status.owner === automaticOwner) &&
+    (status.source_mode === "robot" ? status.manual_mode === "drive" : status.dock === "idle" && status.state === "OFF"),
+}), patch => patch?.mode?.startsWith("teach-") ? post("patrol", patch).catch(() => null) : command("patrol", patch));
 
 updateCompanion = addCompanionTools(() => ({
-  live: previewIsLive() && Boolean(presented) && !selection && presented.boot === status.boot,
+  live: previewIsLive(),
   image: presented?.image,
   frame: presented?.frame,
   dock: status.dock,

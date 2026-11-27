@@ -35,9 +35,11 @@ jobs:
           NODE_PATH: ${{ runner.temp }}/ori-browser/node_modules
         run: |
           npm install --prefix "$RUNNER_TEMP/ori-browser" playwright@1.58.2
-          "$RUNNER_TEMP/ori-browser/node_modules/.bin/playwright" install --with-deps chromium
+          "$RUNNER_TEMP/ori-browser/node_modules/.bin/playwright" install --with-deps chromium webkit
           make test-browser
+          ORI_TEST_WEBKIT=1 make test-browser
           ORI_TEST_PAGES=1 node tests/browser.cjs
+          ORI_TEST_WEBKIT=1 ORI_TEST_PAGES=1 node tests/browser.cjs
       - uses: actions/upload-pages-artifact@v4
         if: github.event_name != 'pull_request'
         with:

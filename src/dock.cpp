@@ -30,17 +30,27 @@ bool Engine::dockInProgress() const {
            dockState_ == DockState::Checking;
 }
 
-bool Engine::canRequestHome(Milliseconds now) const {
-    return (dockState_ == DockState::Idle || dockState_ == DockState::Failed) &&
-           dockSignal_ == DockSignal::Idle && dockSample_ >= 0 &&
-           now >= dockSample_ && now - dockSample_ <= dockTelemetryLimit && inhibits_.empty();
+bool Engine::confirmedDockIdle(Milliseconds now) const {
+    return dockState_ == DockState::Idle && dockSignal_ == DockSignal::Idle &&
+           dockSample_ >= 0 && now >= dockSample_ && now - dockSample_ <= dockTelemetryLimit;
 }
 
-bool Engine::requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
+bool Engine::canRequestHome(Milliseconds now, bool allowBatteryOnly) const {
+    const bool failedAndIdle = dockState_ == DockState::Failed && dockSignal_ == DockSignal::Idle &&
+                               dockSample_ >= 0 && now >= dockSample_ && now - dockSample_ <= dockTelemetryLimit;
+    if ((confirmedDockIdle(now) || failedAndIdle) && inhibits_.empty()) return true;
+    return allowBatteryOnly && !dockOwner_ &&
+           (dockState_ == DockState::Idle || dockState_ == DockState::Unknown || dockState_ == DockState::Failed) &&
+           batteryAt_ >= 0 && now >= batteryAt_ && now - batteryAt_ <= liveBatteryLifetime && !batteryCharging_ &&
+           inhibits_.size() == inhibits_.count(Inhibit::ReturnHome);
+}
+
+bool Engine::requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now, bool allowBatteryOnly) {
     tick(now);
     const bool replacingAuto = (owner_ == systemOwner && driver != 0);
     if (!driver || generation != generation_ || (owner_ && driver != owner_ && !replacingAuto) ||
-        !canRequestHome(now)) return false;
+        !canRequestHome(now, allowBatteryOnly)) return false;
+    batteryOnlyReturn_ = !canRequestHome(now);
     autoDockReason_ = "owner-home";
     setInhibit(Inhibit::ReturnHome, true);
     dockStarted_ = now;
@@ -53,6 +63,7 @@ bool Engine::requestHome(std::uint64_t driver, std::uint64_t generation, Millise
 
 bool Engine::triggerAutoHome(std::string_view reason, Milliseconds now) {
     if (!canRequestHome(now)) return false;
+    batteryOnlyReturn_ = false;
     autoDockReason_ = reason;
     setInhibit(Inhibit::ReturnHome, true);
     dockStarted_ = now;
@@ -65,19 +76,20 @@ bool Engine::triggerAutoHome(std::string_view reason, Milliseconds now) {
 
 void Engine::observeBattery(int percent, bool charging, Milliseconds now) {
     batteryPercent_ = percent;
+    batteryAt_ = now;
     batteryCharging_ = (charging > 0);
     const bool critical = percent >= 0 && charging == 0 &&
                           percent <= (policy_.autoDockLowBattery ? 10 : 15);
     setInhibit(Inhibit::LowBattery, critical);
 
     if (charging) {
-        observeDock(DockSignal::Charging, now);
+        observeDockSignal(DockSignal::Charging, now, true);
         autoDockLowBatTriggered_ = false;
         autoDockIdleTriggered_ = false;
         autoDockDisconnectTriggered_ = false;
         autoDockReason_ = "none";
     } else if (dockSignal_ == DockSignal::Charging) {
-        observeDock(DockSignal::Unknown, now);
+        observeDockSignal(DockSignal::Unknown, now, true);
     }
 
     if (policy_.autoDockLowBattery && !autoDockLowBatTriggered_ &&
@@ -104,14 +116,28 @@ void Engine::cancelDock(bool failure, Milliseconds now) {
 // Inputs are ordered snapshots from the factory controller in the IPC clock domain.
 // Idle means both stationary and off the base. Charging includes confirmed full-on-base.
 void Engine::observeDock(DockSignal signal, Milliseconds sampled) {
+    observeDockSignal(signal, sampled, false);
+}
+
+void Engine::observeDockSignal(DockSignal signal, Milliseconds sampled, bool fromBattery) {
     if (sampled <= dockSample_) return;
     tick(sampled);
     const auto previous = dockSignal_;
-    const bool continuous = dockSample_ >= 0 && sampled - dockSample_ <= dockTelemetryLimit;
+    const Milliseconds continuityLimit =
+        (signal == DockSignal::Charging && previous == DockSignal::Charging &&
+         chargingFromBattery_ && fromBattery)
+            ? liveBatteryLifetime
+            : dockTelemetryLimit;
+    const bool continuous = dockSample_ >= 0 && sampled - dockSample_ <= continuityLimit;
     dockSample_ = sampled;
     dockSignal_ = signal;
+    chargingFromBattery_ = (signal == DockSignal::Charging) && fromBattery;
     if (signal != DockSignal::Charging || !continuous) chargeSince_ = -1;
     if (signal == DockSignal::Unknown) {
+        if (batteryOnlyReturn_ && dockOwner_ && dockState_ == DockState::Checking) {
+            dockState_ = DockState::Requested;
+            return;
+        }
         if (dockOwner_ && dockInProgress()) cancelDock(true, sampled);
         else if (dockState_ != DockState::Stopping || dockAction_ == DockAction::None) {
             dockState_ = DockState::Unknown;

@@ -1,7 +1,7 @@
 "use strict";
 
 const prefix = "ori-shell:";
-const cacheName = prefix + self.registration.scope + ":1";
+const cacheName = prefix + self.registration.scope + ":3";
 const shell = new Set(["", "index.html", "companion.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"]);
 
 self.addEventListener("install", event => {

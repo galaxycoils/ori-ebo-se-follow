@@ -296,10 +296,90 @@ void testMavlinkAndKalayHardware() {
 
     std::uint8_t batPayload[18]{};
     batPayload[16] = 83; // battery % at packet offset 22
-    batPayload[17] = 1;  // charging flag at packet offset 23
+    batPayload[17] = 2;  // charging/full-on-base state at packet offset 23
     const auto batFrame = ori::mavlink::packFrame(207, batPayload, sizeof(batPayload), 0);
     const auto parsed = ori::mavlink::parseBatteryStatus(batFrame.data(), batFrame.size());
     assert(parsed.has_value() && parsed->batteryPercent == 83 && parsed->charging == 1);
+
+    // Shared RDT reassembly and msg 207 validation vectors (mirrored in tests/replay.py).
+    const std::vector<std::uint8_t> vecA{
+        0xFE, 0x12, 0x01, 0x00, 0x00, 0xCF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x53, 0x02, 0xB8, 0xC0};
+    const std::vector<std::uint8_t> vecB{
+        0xFE, 0x12, 0x02, 0x00, 0x00, 0xCF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x29, 0x00, 0xE0, 0x92};
+    const std::vector<std::uint8_t> vecNon207{
+        0xFE, 0x04, 0x00, 0x00, 0x00, 0xC8, 0x9A, 0x9C, 0xFF, 0x01, 0x75, 0x5E};
+    const std::vector<std::uint8_t> vecBadLen{
+        0xFE, 0x11, 0x03, 0x00, 0x00, 0xCF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x53, 0x02, 0xFD, 0xC9};
+    const std::vector<std::uint8_t> vecBadBat{
+        0xFE, 0x12, 0x04, 0x00, 0x00, 0xCF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x65, 0x01, 0x68, 0x04};
+    const std::vector<std::uint8_t> vecBadChg{
+        0xFE, 0x12, 0x05, 0x00, 0x00, 0xCF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x03, 0xF7, 0xB1};
+    assert(batFrame.size() == vecA.size() && vecA[22] == 83 && vecA[23] == 2);
+
+    ori::mavlink::RdtParser rdt;
+    for (std::size_t split = 1; split < vecA.size(); ++split) {
+        rdt.reset();
+        assert(rdt.feed(vecA.data(), split).empty());
+        const auto out = rdt.feed(vecA.data() + split, vecA.size() - split);
+        assert(out.size() == 1 && out[0].batteryPercent == 83 && out[0].charging == 1);
+    }
+    rdt.reset();
+    std::vector<ori::mavlink::BatteryTelemetry> byteByByte;
+    for (std::uint8_t b : vecA) {
+        const auto out = rdt.feed(&b, 1);
+        byteByByte.insert(byteByByte.end(), out.begin(), out.end());
+    }
+    assert(byteByByte.size() == 1 && byteByByte[0].batteryPercent == 83 && byteByByte[0].charging == 1);
+
+    std::vector<std::uint8_t> joined = vecNon207;
+    joined.insert(joined.end(), vecA.begin(), vecA.end());
+    joined.insert(joined.end(), vecB.begin(), vecB.end());
+    rdt.reset();
+    const auto joinedOut = rdt.feed(joined.data(), joined.size());
+    assert(joinedOut.size() == 2);
+    assert(joinedOut[0].batteryPercent == 83 && joinedOut[0].charging == 1);
+    assert(joinedOut[1].batteryPercent == 41 && joinedOut[1].charging == 0);
+
+    // Truncated + reset on reconnect discards previous-session partial data.
+    rdt.reset();
+    assert(rdt.feed(vecA.data(), 10).empty());
+    rdt.reset();
+    assert(rdt.feed(vecA.data() + 10, vecA.size() - 10).empty());
+    const auto afterReset = rdt.feed(vecB.data(), vecB.size());
+    assert(afterReset.size() == 1 && afterReset[0].batteryPercent == 41 && afterReset[0].charging == 0);
+
+    // Corrupt checksum, payload mutation, bad length, or out-of-range fields never decode.
+    auto vecBadCrc = vecA;
+    vecBadCrc.back() ^= 0x01u;
+    auto vecBadPayload = vecA;
+    vecBadPayload[22] = 84;
+    for (const auto& bad : {vecBadCrc, vecBadPayload, vecBadLen, vecBadBat, vecBadChg}) {
+        rdt.reset();
+        assert(rdt.feed(bad.data(), bad.size()).empty());
+    }
+    std::vector<std::uint8_t> badThenValid = vecBadCrc;
+    badThenValid.insert(badThenValid.end(), vecB.begin(), vecB.end());
+    rdt.reset();
+    const auto recovered = rdt.feed(badThenValid.data(), badThenValid.size());
+    assert(recovered.size() == 1 && recovered[0].batteryPercent == 41 && recovered[0].charging == 0);
+
+    std::vector<std::uint8_t> flooded(5000, 0xAAu);
+    flooded.insert(flooded.end(), vecA.begin(), vecA.end());
+    rdt.reset();
+    const auto floodOut = rdt.feed(flooded.data(), flooded.size());
+    assert(rdt.bufferedBytes() <= ori::mavlink::RdtParser::maxBufferBytes);
+    assert(floodOut.size() == 1 && floodOut[0].batteryPercent == 83 && floodOut[0].charging == 1);
+
+    const auto nightParam = ori::mavlink::paramSetFrame("video", "night_vision", 1.0f);
+    assert(nightParam.size() == 47 && nightParam[0] == 0xFEu && nightParam[1] == 39 && nightParam[5] == 229);
+    assert(std::string(reinterpret_cast<const char*>(nightParam.data() + 12), 18) == "video-night_vision");
+    const std::uint16_t expectedCrc = ori::mavlink::crcX25(nightParam.data() + 1, 5 + 39, 208);
+    assert(nightParam[45] == (expectedCrc & 0xFFu) && nightParam[46] == ((expectedCrc >> 8) & 0xFFu));
 
     // Safety-locked KalayHardware (followEnabled=false) emits zero motor frames on Follow.
     std::vector<std::vector<std::uint8_t>> packets;
@@ -343,6 +423,8 @@ void testMavlinkAndKalayHardware() {
     assert(lockedRt.requestHome(1, lockedRt.engine().generation(), 700));
     assert(packets.size() == 4); // revokeDrive (202 stop) followed by dock (200)
     assert(packets[2][10] == 202 && packets[3][10] == 200);
+    assert(locked.setNightVision(true) && locked.setSafetyProtections(true, true) && locked.setFactoryPatrol(false));
+    assert(packets.size() == 8 && packets[4][10] == 229 && packets[5][10] == 229 && packets[6][10] == 229 && packets[7][10] == 229);
 }
 #endif
 
@@ -400,23 +482,28 @@ void testIntelligentMemorySpotAndDock() {
         if (i < 11) assert(engine.state() == State::Lost);
     }
     assert(!engine.heartbeat(2, engine.generation(), 7, 3100));
+    assert(!engine.heartbeat(1, engine.generation(), 11, 3100));
     assert(engine.owner() == ori::systemOwner);
-    assert(engine.heartbeat(1, engine.generation(), 11, 3100));
+    assert(engine.select(1, engine.generation(), 11, {40, 65, 80, 80}, 3100));
     assert(!engine.forgetMemory(2, 3100));
+    engine.frame(makeFrame(12, 3200, {{40, 65, 80, 80}}), 3200);
+    assert(engine.heartbeat(1, engine.generation(), 12, 3200));
+    engine.frame(makeFrame(13, 3300, {{40, 65, 80, 80}}), 3300);
+    assert(engine.heartbeat(1, engine.generation(), 13, 3300));
     assert(engine.state() == State::Ready && engine.memoryStatus() == "locked");
     assert(engine.box().has_value() && std::abs(engine.box()->x - 40) <= 2);
 
     // Serialize/deserialize round-trip, stop disarms auto-reacquire, resume/forget work.
     const std::string blob = engine.serializeMemory();
     assert(!blob.empty());
-    assert(engine.stop(1, 3100));
+    assert(engine.stop(1, 3300));
     assert(engine.memoryStatus() == "saved");
-    engine.frame(makeFrame(12, 3200, {target}), 3200);
+    engine.frame(makeFrame(14, 3400, {target}), 3400);
     assert(engine.state() == State::Off); // Stop stays Off
-    assert(engine.resumeMemory(1, engine.generation(), 3200));
-    for (int i = 13; i <= 15; ++i) engine.frame(makeFrame(i, i * 100 + 2000, {target}), i * 100 + 2000);
+    assert(engine.resumeMemory(1, engine.generation(), 3400));
+    for (int i = 15; i <= 17; ++i) engine.frame(makeFrame(i, i * 100 + 2000, {target}), i * 100 + 2000);
     assert(engine.state() == State::Ready);
-    assert(engine.forgetMemory(1, 3500));
+    assert(engine.forgetMemory(1, 3800));
     assert(engine.memoryStatus() == "none");
 
     ori::Engine restored;
@@ -450,6 +537,340 @@ void testIntelligentMemorySpotAndDock() {
     }
     assert(idleEng.dockState() == DockState::Requested);
     assert(idleEng.autoDockReason() == "auto-dock-idle");
+
+    // 30 FPS buffer (>20 frames) retains selection frame, and passive Tracking never triggers CMD_DOCK spin.
+    ori::Engine fpsEng;
+    fpsEng.setPolicy(pol, 33);
+    fpsEng.observeDock(DockSignal::Idle, 33);
+    for (int f = 1; f <= 45; ++f) {
+        fpsEng.frame(makeFrame(static_cast<std::uint64_t>(f), f * 33, {target}), f * 33);
+    }
+    assert(fpsEng.select(1, fpsEng.generation(), 10, target, 45 * 33));
+    assert(fpsEng.state() == State::Tracking);
+    fpsEng.tick(45 * 33 + 800);
+    assert(fpsEng.state() == State::Tracking && fpsEng.owner() == ori::systemOwner);
+    assert(fpsEng.dockState() == DockState::Idle && fpsEng.takeDockAction() == DockAction::None);
+}
+
+Frame makeRgbFrame(std::uint64_t id, Milliseconds captured, std::optional<Box> target,
+                   bool invertInternal = false) {
+    Frame frame;
+    frame.id = id;
+    frame.captured = captured;
+    frame.rgb.resize(ori::imageSize * 3u);
+    for (int y = 0; y < ori::imageHeight; ++y) {
+        for (int x = 0; x < ori::imageWidth; ++x) {
+            const std::size_t idx = static_cast<std::size_t>(y) * ori::imageWidth + x;
+            const std::size_t p = idx * 3u;
+            int r = 185, g = 170, b = 150;
+            if (target && x >= target->x && x < target->x + target->width &&
+                y >= target->y && y < target->y + target->height) {
+                const double nx = static_cast<double>(x - target->x) / target->width;
+                const double ny = static_cast<double>(y - target->y) / target->height;
+                const double sign = invertInternal ? -1.0 : 1.0;
+                const int tex = static_cast<int>(std::lround(sign * (nx - 0.5) * 80.0 + 18.0 * std::sin(ny * 12.0)));
+                if (ny < 0.5) {
+                    r = std::clamp(215 + tex, 0, 255);
+                    g = std::clamp(115 + tex / 2, 0, 255);
+                    b = 45;
+                } else {
+                    r = 40;
+                    g = std::clamp(120 + tex / 2, 0, 255);
+                    b = std::clamp(165 + tex, 0, 255);
+                }
+            }
+            frame.rgb[p] = static_cast<std::uint8_t>(r);
+            frame.rgb[p + 1] = static_cast<std::uint8_t>(g);
+            frame.rgb[p + 2] = static_cast<std::uint8_t>(b);
+            frame.pixels[idx] = static_cast<std::uint8_t>((77 * r + 150 * g + 29 * b + 128) >> 8);
+        }
+    }
+    return frame;
+}
+
+void testRgbRealWorldTracking() {
+    ori::Tracker tracker;
+    assert(!tracker.select(makeRgbFrame(1, 100, std::nullopt), {120, 60, 40, 60}));
+
+    // Locks across aspect ratio shifts and extreme lighting/gradient reversal via 2-zone RGB cue.
+    const Box initial{140, 52, 36, 64};
+    assert(tracker.select(makeRgbFrame(1, 100, initial, false), initial));
+    const Box turned{156, 60, 52, 48};
+    assert(tracker.update(makeRgbFrame(2, 166, turned, true)));
+    assert(std::abs(tracker.box().centerX() - turned.centerX()) <= 10.0);
+    assert(tracker.update(makeRgbFrame(3, 232, Box{164, 62, 50, 50}, true)));
+    assert(std::abs(tracker.box().centerX() - 189.0) <= 10.0);
+
+    // Near-border RGB ring & histogram extraction stays strictly in bounds under ASan.
+    assert(tracker.select(makeRgbFrame(4, 300, Box{2, 2, 36, 48}), {2, 2, 36, 48}));
+    assert(tracker.update(makeRgbFrame(5, 300, Box{14, 10, 36, 48})));
+    assert(tracker.select(makeRgbFrame(6, 330, Box{260, 118, 36, 48}), {260, 118, 36, 48}));
+    assert(tracker.update(makeRgbFrame(7, 366, Box{280, 128, 38, 48})));
+    assert(tracker.box().visible());
+
+    // Live RGB Engine: delayed select catch-up across 5 frames + 6-frame coast without Lost.
+    ori::Engine eng;
+    ori::Policy pol{};
+    pol.autoReacquire = true;
+    pol.autoGap = true;
+    eng.setPolicy(pol, 100);
+    eng.observeDock(DockSignal::Idle, 100);
+    for (int f = 1; f <= 6; ++f) {
+        const Box pos{100 + (f - 1) * 6, 56, 36, 60};
+        eng.frame(makeRgbFrame(static_cast<std::uint64_t>(f), 100 + f * 66, pos), 100 + f * 66);
+    }
+    assert(eng.select(1, eng.generation(), 1, {100, 56, 36, 60}, 100 + 6 * 66));
+    assert(eng.state() == State::Tracking && eng.box().has_value());
+    assert(std::abs(eng.box()->x - 130) <= 6);
+    for (int f = 7; f <= 8; ++f) {
+        const Milliseconds t = 100 + f * 66;
+        eng.frame(makeRgbFrame(static_cast<std::uint64_t>(f), t, Box{130, 56, 36, 60}), t);
+        assert(eng.heartbeat(1, eng.generation(), static_cast<std::uint64_t>(f), t));
+    }
+    assert(eng.state() == State::Ready); // auto-gap tolerates RGB variance cleanly
+
+    // 6-frame occlusion coast keeps owner active without wiping into State::Lost.
+    for (int f = 9; f <= 14; ++f) {
+        const Milliseconds t = 100 + f * 66;
+        eng.frame(makeRgbFrame(static_cast<std::uint64_t>(f), t, std::nullopt), t);
+        assert(eng.heartbeat(1, eng.generation(), static_cast<std::uint64_t>(f), t));
+        assert(eng.state() == State::Ready);
+    }
+    eng.frame(makeRgbFrame(15, 100 + 15 * 66, Box{136, 56, 40, 58}), 100 + 15 * 66);
+    assert(eng.state() == State::Ready && eng.box().has_value());
+    assert(std::abs(eng.box()->centerX() - 156.0) <= 6.0);
+
+    // Distractor rejection: removing target with distractor elsewhere must reject rather than drift.
+    ori::Tracker strict;
+    assert(strict.select(makeRgbFrame(1, 100, Box{140, 56, 40, 58}), {140, 56, 40, 58}));
+    Frame distractorOnly = makeRgbFrame(2, 166, Box{32, 56, 40, 58});
+    assert(!strict.update(distractorOnly)); // far distractor beyond bounded jump radius rejected
+
+    Frame twinNearby = makeRgbFrame(3, 200, Box{116, 56, 40, 58});
+    const Frame rightTwin = makeRgbFrame(3, 200, Box{164, 56, 40, 58});
+    for (int y = 56; y < 114; ++y) {
+        for (int x = 164; x < 204; ++x) {
+            const std::size_t idx = static_cast<std::size_t>(y) * ori::imageWidth + x;
+            twinNearby.pixels[idx] = rightTwin.pixels[idx];
+            twinNearby.rgb[idx * 3 + 0] = rightTwin.rgb[idx * 3 + 0];
+            twinNearby.rgb[idx * 3 + 1] = rightTwin.rgb[idx * 3 + 1];
+            twinNearby.rgb[idx * 3 + 2] = rightTwin.rgb[idx * 3 + 2];
+        }
+    }
+    assert(!strict.update(twinNearby)); // near equidistant twins trigger ambiguity hold rather than random flip
+
+    // Calm live steering deadband ignores minor sway & single-frame glitches, acts after 2 off-axis frames.
+    ori::Steering calm;
+    calm.teach({120, 56, 60, 60}, 3);
+    assert(calm.update({88, 56, 60, 60}, true).motion == Motion::Hold);   // center ~0.37 (within [0.34, 0.66])
+    assert(calm.update({172, 56, 60, 60}, true).motion == Motion::Hold);  // center ~0.63 (within [0.34, 0.66])
+    assert(calm.update({66, 56, 60, 60}, true).motion == Motion::Hold);   // single frame < 0.34 -> confirm-off-axis
+    assert(calm.update({88, 56, 60, 60}, true).motion == Motion::Hold);   // transient cleared
+    assert(calm.update({66, 56, 60, 60}, true).motion == Motion::Hold);   // 1st sustained off-axis frame
+    assert(calm.update({66, 56, 60, 60}, true).motion == Motion::Left);   // 2nd sustained frame turns Left
+    assert(calm.update({111, 56, 60, 60}, true).motion == Motion::Hold);  // stops inside inner [0.43, 0.57]
+}
+
+void testChargingSourceLifetimeAndDockedSelection() {
+    MockHardware hardware;
+    ori::Runtime runtime(hardware);
+    const Box target{120, 65, 80, 80};
+    runtime.synchronize({}, DockSignal::Unknown, 100);
+    runtime.engine();
+    // Base Watch off by default; battery samples 2,000 ms apart confirm charging on the 2nd sample.
+    Milliseconds t = 2000;
+    runtime.frame(makeFrame(1, t, {target}), t);
+    runtime.observeBattery(91, true, t);
+    assert(runtime.engine().dockState() == DockState::Checking);
+    assert(runtime.engine().canSelect(t)); // battery-backed checking permits explicit camera-only select
+
+    for (int obs = 2; obs <= 8; ++obs) {
+        t += 2000;
+        runtime.frame(makeFrame(static_cast<std::uint64_t>(obs), t, {target}), t);
+        runtime.observeBattery(91, true, t);
+        assert(runtime.engine().dockState() == DockState::Charging);
+        assert(runtime.engine().canSelect(t));
+    }
+
+    // With Base Watch off, human selects while docked; Follow stays blocked and wheels stay idle.
+    assert(runtime.select(1, runtime.engine().generation(), 8, target, t));
+    assert(runtime.engine().state() == State::Tracking);
+    runtime.frame(makeFrame(9, t + 100, {target}), t + 100);
+    assert(runtime.heartbeat(1, runtime.engine().generation(), 9, t + 100));
+    runtime.frame(makeFrame(10, t + 200, {target}), t + 200);
+    assert(runtime.heartbeat(1, runtime.engine().generation(), 10, t + 200));
+    assert(runtime.teach(1, runtime.engine().generation(), t + 200));
+    assert(!runtime.start(1, runtime.engine().generation(), t + 200));
+    assert(runtime.engine().followBlocker(t + 200) == "on-base");
+    assert(hardware.events.empty());
+
+    // Gap over 4,000 ms expires battery-backed charging confirmation.
+    runtime.tick(t + 4001);
+    assert(runtime.engine().dockState() == DockState::Unknown);
+
+    // Two battery samples 3,000 ms apart still confirm charging; 4,100 ms gap does not.
+    ori::Engine battery3s;
+    battery3s.observeBattery(85, true, 1000);
+    assert(battery3s.dockState() == DockState::Checking);
+    battery3s.observeBattery(85, true, 4000);
+    assert(battery3s.dockState() == DockState::Charging);
+    battery3s.observeBattery(85, true, 8100);
+    assert(battery3s.dockState() == DockState::Checking);
+
+    // Factory dock telemetry keeps the 1,500 ms expiry limit, and Contact/return/inhibits block select.
+    ori::Engine factory;
+    factory.observeDock(DockSignal::Charging, 1000);
+    assert(factory.dockState() == DockState::Checking);
+    factory.frame(makeFrame(1, 1000, {target}), 1000);
+    assert(!factory.canSelect(1000)); // factory checking is not battery-backed
+    factory.observeDock(DockSignal::Charging, 2600);
+    assert(factory.dockState() == DockState::Checking); // >1500 ms reset factory streak
+    factory.observeDock(DockSignal::Charging, 3600);
+    factory.observeDock(DockSignal::Charging, 4200);
+    assert(factory.dockState() == DockState::Charging);
+    factory.tick(5800);
+    assert(factory.dockState() == DockState::Unknown);
+
+    factory.observeDock(DockSignal::Contact, 6000);
+    factory.frame(makeFrame(2, 6000, {target}), 6000);
+    assert(!factory.canSelect(6000));
+    factory.observeDock(DockSignal::Idle, 6100);
+    assert(factory.requestHome(1, factory.generation(), 6100));
+    factory.frame(makeFrame(3, 6100, {target}), 6100);
+    assert(!factory.canSelect(6100)); // active return blocks select
+    factory.observeBattery(90, true, 6200);
+    factory.frame(makeFrame(4, 6200, {target}), 6200);
+    assert(factory.dockOwner() == 1 && !factory.canSelect(6200)); // active return checking blocks select
+    assert(factory.stop(1, 6200));
+    factory.observeDock(DockSignal::Idle, 6300);
+    factory.setInhibit(Inhibit::Sleep, true);
+    factory.frame(makeFrame(5, 6300, {target}), 6300);
+    assert(!factory.canSelect(6300));
+}
+
+void testAutoSpotGenerationRaceAndOwnership() {
+    ori::Engine engine;
+    ori::Policy pol{};
+    pol.autoSpot = true;
+    engine.setPolicy(pol, 100);
+    engine.observeDock(DockSignal::Idle, 100);
+
+    for (int i = 1; i <= 3; ++i) {
+        engine.frame(makeFrame(static_cast<std::uint64_t>(i), i * 100, {}), i * 100);
+    }
+    const std::uint64_t genBeforeSpot = engine.generation();
+    const Box humanTarget{40, 65, 48, 48};
+    engine.frame(makeFrame(4, 400, {humanTarget, {160, 60, 72, 72}}), 400);
+    for (int i = 5; i <= 6; ++i) {
+        engine.frame(makeFrame(static_cast<std::uint64_t>(i), i * 100, {humanTarget, {160 + i * 2, 60, 72, 72}}),
+                     i * 100);
+    }
+    assert(engine.state() == State::Tracking && engine.isAutonomous());
+    assert(engine.generation() > genBeforeSpot);
+    // Heartbeat must never claim an automatic target.
+    assert(!engine.heartbeat(1, engine.generation(), 6, 600));
+    assert(engine.owner() == ori::systemOwner);
+    // Human selection across autonomous generation bumps succeeds while frame 4 is valid.
+    assert(engine.select(1, genBeforeSpot, 4, humanTarget, 600));
+    assert(engine.owner() == 1);
+
+    // Delayed selection after Stop or another human taking control is rejected.
+    const std::uint64_t genHuman1 = engine.generation();
+    assert(engine.stop(1, 700));
+    assert(!engine.select(1, genHuman1, 4, humanTarget, 700));
+    assert(engine.select(2, engine.generation(), 6, {172, 60, 72, 72}, 700));
+    assert(!engine.select(1, genHuman1, 6, {172, 60, 72, 72}, 700));
+}
+
+void testRgbIrUniformAndCrossing() {
+    auto makeIrRgbFrame = [](std::uint64_t id, Milliseconds captured, std::initializer_list<Box> boxes,
+                             bool boost = false) {
+        Frame gray = makeFrame(id, captured, boxes);
+        std::vector<std::uint8_t> rgb(ori::imageSize * 3u);
+        for (std::size_t i = 0; i < ori::imageSize; ++i) {
+            rgb[i * 3 + 0] = gray.pixels[i];
+            rgb[i * 3 + 1] = gray.pixels[i];
+            rgb[i * 3 + 2] = gray.pixels[i];
+        }
+        Frame out;
+        out.id = id;
+        out.captured = captured;
+        assert(ori::fillRgbFrame(rgb.data(), ori::imageWidth, ori::imageHeight, boost, out));
+        return out;
+    };
+
+    // 1) Grayscale IR fed via frame-rgb tracks reliably across motion.
+    ori::Engine irEng;
+    irEng.observeDock(DockSignal::Idle, 100);
+    const Box irStart{120, 65, 60, 60};
+    irEng.frame(makeIrRgbFrame(1, 100, {irStart}, true), 100);
+    assert(irEng.select(1, irEng.generation(), 1, irStart, 100));
+    int irTracked = 0;
+    for (int f = 2; f <= 12; ++f) {
+        const Milliseconds t = f * 100;
+        const Box pos{120 + (f - 1) * 4, 65, 60, 60};
+        irEng.frame(makeIrRgbFrame(static_cast<std::uint64_t>(f), t, {pos}, true), t);
+        assert(irEng.heartbeat(1, irEng.generation(), static_cast<std::uint64_t>(f), t));
+        if (irEng.box() && std::abs(irEng.box()->x - pos.x) <= 8) ++irTracked;
+    }
+    assert(irTracked >= 10);
+
+    // 2) Uniform RGB background cannot acquire a lock.
+    std::vector<std::uint8_t> uniform(ori::imageSize * 3u);
+    for (std::size_t i = 0; i < ori::imageSize; ++i) {
+        uniform[i * 3 + 0] = 110;
+        uniform[i * 3 + 1] = 140;
+        uniform[i * 3 + 2] = 95;
+    }
+    Frame uniformFrame{1, 100, {}, {}};
+    assert(ori::fillRgbFrame(uniform.data(), ori::imageWidth, ori::imageHeight, false, uniformFrame));
+    ori::Tracker uniformTracker;
+    assert(!uniformTracker.select(uniformFrame, {120, 60, 44, 44}));
+
+    // 3) Two similar moving RGB targets crossing must hold motion during ambiguity.
+    auto makeTwoRgb = [](std::uint64_t id, Milliseconds captured, Box a, Box b) {
+        Frame fa = makeRgbFrame(id, captured, a);
+        Frame fb = makeRgbFrame(id, captured, b);
+        for (int y = b.y; y < b.y + b.height; ++y) {
+            for (int x = b.x; x < b.x + b.width; ++x) {
+                const std::size_t idx = static_cast<std::size_t>(y) * ori::imageWidth + x;
+                fa.pixels[idx] = fb.pixels[idx];
+                fa.rgb[idx * 3 + 0] = fb.rgb[idx * 3 + 0];
+                fa.rgb[idx * 3 + 1] = fb.rgb[idx * 3 + 1];
+                fa.rgb[idx * 3 + 2] = fb.rgb[idx * 3 + 2];
+            }
+        }
+        return fa;
+    };
+    ori::Engine crossEng;
+    crossEng.observeDock(DockSignal::Idle, 100);
+    const Box a0{70, 60, 40, 56};
+    const Box b0{210, 60, 40, 56};
+    crossEng.frame(makeTwoRgb(1, 100, a0, b0), 100);
+    assert(crossEng.select(1, crossEng.generation(), 1, a0, 100));
+    for (int f = 2; f <= 4; ++f) {
+        const Milliseconds t = f * 100;
+        const Box af{70, 60, 40, 56};
+        crossEng.frame(makeTwoRgb(static_cast<std::uint64_t>(f), t, af, b0), t);
+        assert(crossEng.heartbeat(1, crossEng.generation(), static_cast<std::uint64_t>(f), t));
+    }
+    assert(crossEng.teach(1, crossEng.generation(), 400));
+    assert(crossEng.start(1, crossEng.generation(), 400));
+    bool sawAmbiguityHold = false;
+    for (int step = 1; step <= 14; ++step) {
+        const std::uint64_t fid = static_cast<std::uint64_t>(4 + step);
+        const Milliseconds t = (4 + step) * 100;
+        const Box ax{70 + step * 10, 60, 40, 56};
+        const Box bx{210 - step * 10, 60, 40, 56};
+        crossEng.frame(makeTwoRgb(fid, t, ax, bx), t);
+        if (crossEng.owner() == 1) {
+            crossEng.heartbeat(1, crossEng.generation(), fid, t);
+        }
+        if (std::abs(ax.x - bx.x) <= 24 && crossEng.decision().motion == Motion::Hold) {
+            sawAmbiguityHold = true;
+        }
+    }
+    assert(sawAmbiguityHold);
 }
 
 } // namespace
@@ -464,5 +885,9 @@ int main() {
     testMavlinkAndKalayHardware();
 #endif
     testIntelligentMemorySpotAndDock();
+    testRgbRealWorldTracking();
+    testChargingSourceLifetimeAndDockedSelection();
+    testAutoSpotGenerationRaceAndOwnership();
+    testRgbIrUniformAndCrossing();
     std::cout << "Native core and soak tests passed\n";
 }

@@ -44,14 +44,15 @@ public:
     bool select(std::uint64_t driver, std::uint64_t generation, std::uint64_t frameId,
                 Box box, Milliseconds now);
     bool teach(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
-    bool start(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    bool start(std::uint64_t driver, std::uint64_t generation, Milliseconds now,
+               std::uint64_t presented = 0);
     bool trackOnly(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
     bool heartbeat(std::uint64_t driver, std::uint64_t generation, std::uint64_t displayed,
                    Milliseconds now);
     bool stop(std::uint64_t driver, Milliseconds now);
     void setInhibit(Inhibit cause, bool active, Milliseconds now);
 
-    bool requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    bool requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now, bool allowBatteryOnly = false);
     void observeDock(DockSignal signal, Milliseconds sampled);
     void observeBattery(int percent, bool charging, Milliseconds now);
     void setPolicy(const Policy& policy, Milliseconds now);

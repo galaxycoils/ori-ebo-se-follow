@@ -13,7 +13,7 @@ BRIDGE_TEST_FLAGS = -DORI_TEST_BRIDGE
 BRIDGE_REPLAY_FLAG = --bridge
 endif
 
-.PHONY: all test test-asan test-browser test-pages bench replay demo pages clean
+.PHONY: all test test-asan test-browser test-pages bench replay demo live shim pages clean
 all: build/ori-replay build/ori-probe $(BRIDGE_TARGET)
 
 build:
@@ -60,13 +60,29 @@ replay: build/ori-replay
 demo: build/ori-replay
 	$(PYTHON) demo/server.py
 
-pages: build/pages/ori.mjs
+live: build/ori-bridge shim
+	$(PYTHON) demo/server.py --bind 127.0.0.1 --port 8766 --enable-follow --kalay-cmd ./bridge/run_shim.sh
+
+shim: bridge/Containerfile bridge/ori_kalay_shim.c
+	@export PATH="/opt/homebrew/bin:/usr/local/bin:$$PATH"; \
+	RUNTIME=$$(command -v docker || command -v podman || true); \
+	if [ -z "$$RUNTIME" ]; then echo "Install Docker or Colima to build ori-kalay-shim" >&2; exit 1; fi; \
+	if ! "$$RUNTIME" info >/dev/null 2>&1 && command -v colima >/dev/null 2>&1; then \
+	  colima start --cpu 2 --memory 1 --disk 10 >&2; \
+	fi; \
+	"$$RUNTIME" build --platform=linux/arm64 -t ori-kalay-shim:latest -f bridge/Containerfile .
+
+pages: build/pages/ori.mjs build/pages/ori.wasm
 	$(PYTHON) demo/build_pages.py build/pages
 
-build/pages/ori.mjs: $(CORE) src/ori.hpp src/replay.cpp Makefile | build
-	mkdir -p build/pages
+%/ori.mjs %/ori.wasm: $(CORE) src/ori.hpp src/replay.cpp | build
+	mkdir -p $(@D)
+	@if ! command -v $(EMXX) >/dev/null 2>&1; then \
+	  echo "Missing $(EMXX): install/activate Emscripten 4.0.23 to build $(@D)/ori.mjs and $(@D)/ori.wasm" >&2; exit 1; \
+	fi
 	$(EMXX) -O2 -std=c++17 $(CORE) src/replay.cpp --no-entry -sENVIRONMENT=web \
-		-sSTACK_SIZE=131072 -sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8 -o $@
+	  -sSTACK_SIZE=131072 -sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8 -o $(@D)/ori.mjs
+	@test -f "$(@D)/ori.mjs" && test -f "$(@D)/ori.wasm"
 
 clean:
 	rm -rf build

@@ -17,14 +17,16 @@
 namespace {
 
 void report(std::ostream& reply, ori::Engine& engine, bool accepted, ori::Milliseconds now,
-            bool manualActive = false, bool followEnabled = false, std::size_t routeSteps = 0,
-            const std::string& memoryBlob = "") {
+            bool manualActive = false, bool followEnabled = false, bool invertTurn = false,
+            std::size_t routeSteps = 0, const std::string& memoryBlob = "") {
     const auto& decision = engine.decision();
     const auto& pol = engine.policy();
     reply << "{\"accepted\":" << (accepted ? "true" : "false")
               << ",\"state\":\"" << ori::name(engine.state()) << "\""
               << ",\"generation\":" << engine.generation()
               << ",\"can_teach\":" << (engine.canTeach() ? "true" : "false")
+              << ",\"can_select\":" << (engine.canSelect(now) ? "true" : "false")
+              << ",\"follow_blocker\":\"" << engine.followBlocker(now) << "\""
               << ",\"dock\":\"" << ori::name(engine.dockState()) << "\""
               << ",\"dock_action\":\"" << ori::name(engine.takeDockAction()) << "\""
               << ",\"can_home\":" << (engine.canRequestHome(now) ? "true" : "false")
@@ -34,6 +36,7 @@ void report(std::ostream& reply, ori::Engine& engine, bool accepted, ori::Millis
               << ",\"manual_active\":" << (manualActive ? "true" : "false")
               << ",\"retracing\":false,\"route_steps\":" << routeSteps
               << ",\"follow_enabled\":" << (followEnabled ? "true" : "false")
+              << ",\"invert_turn\":" << (invertTurn ? "true" : "false")
               << ",\"confidence\":" << engine.confidencePercent()
               << ",\"memory\":\"" << engine.memoryStatus() << "\""
               << ",\"battery_percent\":" << engine.batteryPercent()
@@ -73,11 +76,13 @@ struct Replay {
     ori::Milliseconds previousNow = -1;
     bool manualActive = false;
     bool followEnabled = false;
+    bool invertTurn = false;
     std::size_t routeSteps = 0;
     ori::Milliseconds manualExpiresAt = 0;
 
     bool run(const std::string& line, const std::function<bool(ori::Frame&)>& readFrame,
-             std::ostream& reply) {
+             std::ostream& reply,
+             const std::function<bool(ori::Frame&, int, int, int)>& readRgbFrame = {}) {
         std::istringstream input(line);
         std::string command;
         ori::Milliseconds now;
@@ -85,7 +90,8 @@ struct Replay {
         previousNow = now;
         bool accepted = true;
         std::string memoryBlob;
-        if (manualActive && (command == "frame" || command == "tick") && now >= manualExpiresAt) {
+        if (manualActive && (command == "frame" || command == "frame-rgb" || command == "tick") &&
+            now >= manualExpiresAt) {
             manualActive = false;
             manualExpiresAt = 0;
             engine.setInhibit(ori::Inhibit::Manual, false);
@@ -93,6 +99,14 @@ struct Replay {
         if (command == "frame") {
             ori::Frame frame;
             if (!(input >> frame.id >> frame.captured) || !readFrame(frame)) return false;
+            engine.frame(std::move(frame), now);
+        } else if (command == "frame-rgb") {
+            ori::Frame frame;
+            int width = 0, height = 0, boost = 0;
+            if (!(input >> frame.id >> frame.captured >> width >> height >> boost) ||
+                !readRgbFrame || !readRgbFrame(frame, width, height, boost)) {
+                return false;
+            }
             engine.frame(std::move(frame), now);
         } else if (command == "dock-status") {
             std::string value;
@@ -116,7 +130,7 @@ struct Replay {
             int en = 0, inv = 0;
             if (!(input >> en)) return false;
             float fwd = 0.0f, turn = 0.0f;
-            input >> fwd >> turn >> inv;
+            if (input >> fwd >> turn && (input >> inv)) invertTurn = (inv != 0);
             followEnabled = (en != 0);
             if (!followEnabled && manualActive) {
                 manualActive = false;
@@ -191,7 +205,9 @@ struct Replay {
             } else if (command == "teach") {
                 accepted = engine.teach(owner, generation, now);
             } else if (command == "follow") {
-                accepted = engine.start(owner, generation, now);
+                std::uint64_t presented = 0;
+                input >> presented;
+                accepted = engine.start(owner, generation, now, presented);
             } else if (command == "track") {
                 accepted = engine.trackOnly(owner, generation, now);
             } else if (command == "heartbeat") {
@@ -210,7 +226,7 @@ struct Replay {
                 return false;
             }
         }
-        report(reply, engine, accepted, now, manualActive, followEnabled, routeSteps, memoryBlob);
+        report(reply, engine, accepted, now, manualActive, followEnabled, invertTurn, routeSteps, memoryBlob);
         return true;
     }
 };
@@ -249,9 +265,20 @@ int main() {
             reinterpret_cast<char*>(frame.pixels.data()),
             static_cast<std::streamsize>(frame.pixels.size())));
     };
+    const auto readRgbFrame = [](ori::Frame& frame, int width, int height, int boost) {
+        if (width < ori::imageWidth || height < ori::imageHeight || width > 1920 || height > 1080) {
+            return false;
+        }
+        const std::size_t rgbSize = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3u;
+        std::vector<std::uint8_t> rgb(rgbSize);
+        if (!std::cin.read(reinterpret_cast<char*>(rgb.data()), static_cast<std::streamsize>(rgbSize))) {
+            return false;
+        }
+        return ori::fillRgbFrame(rgb.data(), width, height, boost != 0, frame);
+    };
     std::string line;
     while (std::getline(std::cin, line)) {
-        if (!replay.run(line, readFrame, std::cout)) return 2;
+        if (!replay.run(line, readFrame, std::cout, readRgbFrame)) return 2;
     }
 }
 #endif

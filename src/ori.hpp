@@ -17,6 +17,7 @@ constexpr int imageWidth = 320;
 constexpr int imageHeight = 180;
 constexpr std::size_t imageSize = static_cast<std::size_t>(imageWidth) * imageHeight;
 constexpr Milliseconds frameLifetime = 250;
+constexpr Milliseconds liveFrameLifetime = 650;
 constexpr Milliseconds sessionLifetime = 750;
 constexpr Milliseconds selectionLifetime = 2000;
 constexpr Milliseconds factoryCommandLimit = 300;
@@ -24,6 +25,7 @@ constexpr Milliseconds decisionLatencyBudget = 100;
 constexpr Milliseconds dockAcknowledgement = 3000;
 constexpr Milliseconds dockReturnLimit = 60000;
 constexpr Milliseconds dockTelemetryLimit = 1500;
+constexpr Milliseconds liveBatteryLifetime = 4000;
 constexpr Milliseconds dockChargeConfirmation = 1500;
 constexpr std::uint64_t systemOwner = 9007199254740991ULL;
 
@@ -49,7 +51,10 @@ struct Frame {
     std::uint64_t id = 0;
     Milliseconds captured = 0;
     std::vector<std::uint8_t> pixels = std::vector<std::uint8_t>(imageSize);
+    std::vector<std::uint8_t> rgb;
 };
+
+bool fillRgbFrame(const std::uint8_t* rgb, int width, int height, bool boost, Frame& out);
 
 enum class Motion { Hold, Left, Right, Forward };
 enum class Inhibit { Manual, Docking, Sleep, LowBattery, Obstacle, ReturnHome };
@@ -76,13 +81,14 @@ class Steering {
 public:
     void teach(Box box, int jitter);
     void reset();
-    Decision update(Box box);
+    Decision update(Box box, bool wideDeadband = false);
 
 private:
     Box reference_{};
     int jitter_ = 3;
     int centered_ = 0;
     int retreats_ = 0;
+    int turnPending_ = 0;
     bool advancing_ = false;
     Motion turning_ = Motion::Hold;
 };
@@ -90,7 +96,10 @@ private:
 class Tracker {
 public:
     static constexpr int patchSide = 12;
+    static constexpr int colorBins = 128;
+    static constexpr int colorZones = 2;
     using Patch = std::array<double, patchSide * patchSide>;
+    using ColorHist = std::array<float, colorZones * colorBins>;
 
     bool select(const Frame& frame, Box box);
     bool update(const Frame& frame);
@@ -104,16 +113,33 @@ public:
 private:
     struct Candidate { Box box; double score; };
     static void smoothFrame(const Frame& src, std::vector<std::uint8_t>& dst);
-    static bool hasEdgeContrast(const Patch& rawPatch);
-    static std::optional<Patch> readPatchPixels(const std::uint8_t* pixels, Box box, bool checkEdge);
+    static bool hasEdgeContrast(const Patch& rawPatch, double minStep = 18.0);
+    static std::optional<Patch> readPatchPixels(const std::uint8_t* pixels, Box box, bool checkEdge,
+                                                double minStep = 18.0, double minEnergyPerPx = 16.0);
     static std::optional<Patch> readPatch(const Frame& frame, Box box);
+    static int opponentBin(int r, int g, int b);
+    void computeColorModel(const std::uint8_t* rgb, Box box);
+    static bool extractColorHist(const std::uint8_t* rgb, Box box,
+                                 const std::array<float, colorBins>& weights, ColorHist& hist,
+                                 std::array<float, colorBins>* flatOut = nullptr);
     std::optional<double> scoreBox(const std::uint8_t* pixels, Box box,
                                    const std::array<int, patchSide>& rowOffsets,
                                    const std::array<int, patchSide>& colOffsets) const;
+    std::optional<double> scoreRgbCandidate(const std::uint8_t* px, const std::uint8_t* rgb, Box box,
+                                            const std::array<int, patchSide>& rowOffsets,
+                                            const std::array<int, patchSide>& colOffsets) const;
 
     Box box_{};
+    Box anchorBox_{};
     Patch original_{};
     Patch recent_{};
+    bool hasColor_ = false;
+    ColorHist origColor_{};
+    ColorHist recentColor_{};
+    std::array<float, colorBins> origFgRaw_{};
+    std::array<float, colorBins> origRingRaw_{};
+    std::array<float, colorBins> bgWeights_{};
+    double colorDistinctiveness_ = 0.0;
     int vx_ = 0;
     int vy_ = 0;
     double confidence_ = 0.0;
@@ -129,20 +155,24 @@ public:
     bool select(std::uint64_t driver, std::uint64_t generation, std::uint64_t frameId,
                 Box box, Milliseconds now);
     bool teach(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
-    bool start(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    bool start(std::uint64_t driver, std::uint64_t generation, Milliseconds now,
+               std::uint64_t presented = 0);
+    bool canSelect(Milliseconds now) const;
+    std::string_view followBlocker(Milliseconds now) const;
+    bool confirmedDockIdle(Milliseconds now) const;
     bool trackOnly(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
     bool heartbeat(std::uint64_t driver, std::uint64_t generation, std::uint64_t displayed,
                    Milliseconds now);
     bool stop(std::uint64_t driver, Milliseconds now = -1);
     void setInhibit(Inhibit cause, bool active);
 
-    bool requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now);
+    bool requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now, bool allowBatteryOnly = false);
     void observeDock(DockSignal signal, Milliseconds sampled);
     void observeBattery(int percent, bool charging, Milliseconds now);
     DockAction takeDockAction();
     DockState dockState() const { return dockState_; }
     std::uint64_t dockOwner() const { return dockOwner_; }
-    bool canRequestHome(Milliseconds now) const;
+    bool canRequestHome(Milliseconds now, bool allowBatteryOnly = false) const;
 
     void setPolicy(const Policy& policy, Milliseconds now);
     const Policy& policy() const { return policy_; }
@@ -172,10 +202,12 @@ public:
 private:
     struct Calibration { Box box; int jitter; };
     std::optional<Calibration> calibration() const;
+    Milliseconds activeFrameLifetime() const;
     bool owns(std::uint64_t driver, std::uint64_t generation) const;
-    bool inhibitsBlockTracking() const;
+    bool inhibitsBlockTracking(bool explicitSelect = false) const;
+    void observeDockSignal(DockSignal signal, Milliseconds sampled, bool fromBattery);
     void hold(std::string_view reason);
-    void clear(State state, std::string_view reason);
+    void clear(State state, std::string_view reason, bool autonomous = false);
     bool triggerAutoHome(std::string_view reason, Milliseconds now);
     void updateSpotter(const Frame& frame);
 
@@ -192,6 +224,8 @@ private:
     Milliseconds chargeSince_ = -1;
     Milliseconds lastNow_ = 0;
     bool dockFailure_ = false;
+    bool batteryOnlyReturn_ = false;
+    bool chargingFromBattery_ = false;
 
     Policy policy_{};
     bool remembered_ = false;
@@ -210,6 +244,7 @@ private:
     bool autoSpotArmed_ = true;
 
     int batteryPercent_ = -1;
+    Milliseconds batteryAt_ = -1;
     bool batteryCharging_ = false;
     std::string_view autoDockReason_ = "none";
     Milliseconds idleSince_ = -1;
@@ -219,6 +254,7 @@ private:
 
     State state_ = State::Off;
     std::uint64_t generation_ = 1;
+    std::uint64_t lastHumanGeneration_ = 1;
     std::uint64_t owner_ = 0;
     std::uint64_t displayed_ = 0;
     Milliseconds previewDeadline_ = 0;

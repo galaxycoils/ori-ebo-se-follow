@@ -67,8 +67,9 @@ bool Runtime::teach(std::uint64_t driver, std::uint64_t generation, Milliseconds
     return accepted;
 }
 
-bool Runtime::start(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
-    const bool accepted = engine_.start(driver, generation, now);
+bool Runtime::start(std::uint64_t driver, std::uint64_t generation, Milliseconds now,
+                    std::uint64_t presented) {
+    const bool accepted = engine_.start(driver, generation, now, presented);
     dispatch(now);
     return accepted;
 }
@@ -107,9 +108,9 @@ void Runtime::setInhibit(Inhibit cause, bool active, Milliseconds now) {
     dispatch(now);
 }
 
-bool Runtime::requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now) {
+bool Runtime::requestHome(std::uint64_t driver, std::uint64_t generation, Milliseconds now, bool allowBatteryOnly) {
     if (!synchronized_) return false;
-    const bool accepted = engine_.requestHome(driver, generation, now);
+    const bool accepted = engine_.requestHome(driver, generation, now, allowBatteryOnly);
     dispatch(now);
     return accepted;
 }

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from replay import Scenario
 from client import ReplayClient
-from fixtures import HEIGHT, WIDTH, scene
+from fixtures import HEIGHT, WIDTH, color_scene, scene
 
 
 def find_ffmpeg():
@@ -46,13 +46,14 @@ def labels_from(path):
     return content
 
 
-def evaluate(clip, labels, frame_size):
+def evaluate(clip, labels, frame_size, rgb=False):
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("FFmpeg executable not found")
+    pix_fmt = "rgb24" if rgb else "gray"
     decoder = subprocess.Popen([
         ffmpeg, "-nostdin", "-v", "error", "-i", str(clip), "-vf",
-        "fps=10,scale=320:180,format=gray", "-an", "-f", "rawvideo", "pipe:1",
+        f"fps=10,scale=320:180,format={pix_fmt}", "-an", "-f", "rawvideo", "pipe:1",
     ], stdout=subprocess.PIPE)
     visible = 0
     missed = []
@@ -64,7 +65,10 @@ def evaluate(clip, labels, frame_size):
                 if len(pixels) != frame_size:
                     raise ValueError("The clip has fewer frames than labels.")
                 scenario.now = index * 100
-                status = scenario.run("frame", index, scenario.now, pixels=pixels)
+                if rgb:
+                    status = scenario.run("frame-rgb", index, scenario.now, WIDTH, HEIGHT, 0, pixels=pixels)
+                else:
+                    status = scenario.run("frame", index, scenario.now, pixels=pixels)
                 if index == 1:
                     status = scenario.control("select", index, *label)
                     if not status["accepted"]:
@@ -121,13 +125,26 @@ def self_test():
         ], input=raw_bytes, check=True)
         missed, visible = evaluate(clip, labels_from(labels_path), WIDTH * HEIGHT)
         assert visible == len(labels) and not missed, (missed, visible)
-        print(f"Evaluator self-test passed ({visible}/{visible} synthetic MP4 frames >= 0.5 IoU)")
+
+        rgb_bytes = b"".join(color_scene(tuple(box)) for box in labels)
+        rgb_clip = root / "synthetic_rgb.mp4"
+        subprocess.run([
+            ffmpeg, "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+            "-s", f"{WIDTH}x{HEIGHT}", "-r", "10", "-i", "pipe:0",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", str(rgb_clip),
+        ], input=rgb_bytes, check=True)
+        rgb_missed, rgb_visible = evaluate(rgb_clip, labels_from(labels_path), WIDTH * HEIGHT * 3, rgb=True)
+        assert rgb_visible == len(labels) and (rgb_visible - len(rgb_missed)) / rgb_visible >= 0.9, (
+            rgb_missed, rgb_visible)
+        print(f"Evaluator self-test passed ({visible}/{visible} gray, "
+              f"{rgb_visible - len(rgb_missed)}/{rgb_visible} RGB synthetic MP4 frames >= 0.5 IoU)")
     return 0
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--rgb", action="store_true")
     parser.add_argument("clip", nargs="?", type=Path)
     parser.add_argument("labels", nargs="?", type=Path)
     args = parser.parse_args()
@@ -136,7 +153,8 @@ def main():
     if args.clip is None or args.labels is None:
         parser.error("Provide <clip> and <labels> or pass --self-test")
     labels = labels_from(args.labels)
-    missed, visible = evaluate(args.clip, labels, WIDTH * HEIGHT)
+    frame_size = WIDTH * HEIGHT * (3 if args.rgb else 1)
+    missed, visible = evaluate(args.clip, labels, frame_size, rgb=args.rgb)
     successes = visible - len(missed)
     fraction = successes / visible
     print(f"{len(labels)} labeled frames ({visible} visible)")
